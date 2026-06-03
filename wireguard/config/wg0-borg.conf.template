@@ -1,0 +1,16 @@
+# =============================================================================
+# WireGuard Borg Config — ШАБЛОН
+# =============================================================================
+
+[Interface]
+# IP борга в VPN-сети
+Address    = 10.0.0.3/24
+PrivateKey = REPLACE_WITH_BORG_PRIVATE_KEY
+DNS        = 10.0.0.1
+
+[Peer]
+# Backend сервер
+PublicKey           = REPLACE_WITH_SERVER_PUBLIC_KEY
+Endpoint            = wireguard:51820
+AllowedIPs          = 10.0.0.0/24
+PersistentKeepalive = 25

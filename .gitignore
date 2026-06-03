@@ -1,0 +1,31 @@
+# WireGuard приватные ключи — НИКОГДА не коммитить
+wireguard/config/*.key
+wireguard/config/wg0-server.conf
+wireguard/config/wg0-agent.conf
+wireguard/config/wg0-borg.conf
+
+# Переменные окружения
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Node
+node_modules/
+.nuxt/
+.output/
+
+# БД
+*.db
+*.sqlite
+
+# Docker
+*.log
+wireguard/config/*.key
+wireguard/config/wg1.conf
+wireguard/config/wg0*.conf
+setup.sh
+setup_frontend.sh

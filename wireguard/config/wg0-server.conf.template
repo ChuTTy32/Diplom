@@ -1,0 +1,26 @@
+# =============================================================================
+# WireGuard Server Config — ШАБЛОН
+# Заполнить реальными ключами через: bash wireguard/scripts/gen_keys.sh
+# =============================================================================
+
+[Interface]
+# IP сервера в VPN-сети
+Address    = 10.0.0.1/24
+ListenPort = 51820
+# Вставить приватный ключ сервера (из gen_keys.sh)
+PrivateKey = REPLACE_WITH_SERVER_PRIVATE_KEY
+
+PostUp   = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+# ─── Peer: Agent (10.0.0.2) ──────────────────────────────────────────
+[Peer]
+# Публичный ключ агента (из gen_keys.sh)
+PublicKey  = REPLACE_WITH_AGENT_PUBLIC_KEY
+AllowedIPs = 10.0.0.2/32
+
+# ─── Peer: Borg (10.0.0.3) ───────────────────────────────────────────
+[Peer]
+# Публичный ключ борга (из gen_keys.sh)
+PublicKey  = REPLACE_WITH_BORG_PUBLIC_KEY
+AllowedIPs = 10.0.0.3/32

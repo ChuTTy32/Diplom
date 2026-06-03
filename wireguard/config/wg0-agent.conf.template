@@ -1,0 +1,19 @@
+# =============================================================================
+# WireGuard Agent Config — ШАБЛОН
+# Заполнить через: bash wireguard/scripts/gen_keys.sh
+# =============================================================================
+
+[Interface]
+# IP агента в VPN-сети
+Address    = 10.0.0.2/24
+PrivateKey = REPLACE_WITH_AGENT_PRIVATE_KEY
+DNS        = 10.0.0.1
+
+[Peer]
+# Backend сервер
+PublicKey           = REPLACE_WITH_SERVER_PUBLIC_KEY
+# В docker-compose используем имя сервиса
+Endpoint            = wireguard:51820
+# Только трафик к VPN-сети через туннель
+AllowedIPs          = 10.0.0.0/24
+PersistentKeepalive = 25

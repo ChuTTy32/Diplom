@@ -1,0 +1,132 @@
+networks:
+  backend_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  frontend_net:
+    driver: bridge
+
+volumes:
+  timescale_data:
+  borg_repo:
+  wg_config:
+
+services:
+
+  # ─── TimescaleDB ────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: tsdb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-metrics}
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    networks:
+      backend_net:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-metrics}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── WireGuard VPN ───────────────────────────────────────────────────
+  wireguard:
+    build:
+      context: ./wireguard
+      dockerfile: Dockerfile
+    container_name: wireguard
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - ./wireguard/config:/etc/wireguard
+      - wg_config:/etc/wireguard/keys
+
+  # ─── FastAPI backend ─────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-secret}@timescaledb:5432/${POSTGRES_DB:-metrics}
+      SQLITE_PATH: /app/data/audit.db
+    volumes:
+      - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - backend_net
+      - frontend_net
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  # ─── Python агент ────────────────────────────────────────────────────
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BACKEND_URL: http://backend:8000
+      WATCH_PATH: /monitored
+      ENTROPY_THRESHOLD: ${ENTROPY_THRESHOLD:-7.2}
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-5}
+    volumes:
+      - ./agent:/app
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored:ro
+    networks:
+      - backend_net
+    depends_on:
+      - backend
+
+  # ─── BorgBackup ──────────────────────────────────────────────────────
+  borg:
+    build:
+      context: ./borg
+      dockerfile: Dockerfile
+    container_name: borg
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BORG_REPO: /repo
+      BORG_PASSPHRASE: ${BORG_PASSPHRASE:-changeme}
+      BACKUP_SOURCE: /monitored
+      BACKEND_URL: http://backend:8000
+    volumes:
+      - borg_repo:/repo
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored:ro
+    networks:
+      - backend_net
+    depends_on:
+      - backend
+
+  # ─── Nuxt 4 frontend ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:8000
+    ports:
+      - "3000:3000"
+    networks:
+      - frontend_net
+    depends_on:
+      - backend

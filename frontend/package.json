@@ -1,0 +1,19 @@
+{
+  "name": "ransomware-backup-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview"
+  },
+  "dependencies": {
+    "nuxt": "3.12.4",
+    "vue": "3.4.38",
+    "vue-router": "4.4.3",
+    "chart.js": "4.4.3",
+    "chartjs-adapter-date-fns": "3.0.0",
+    "date-fns": "3.6.0"
+  }
+}
