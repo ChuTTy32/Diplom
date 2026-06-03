@@ -2,9 +2,10 @@
 Эндпоинты для управления инцидентами.
 """
 
+import os
+import subprocess
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional
 from app.core.audit import (
     init_db, log_incident, log_audit,
     get_incidents, get_audit_log,
@@ -13,6 +14,8 @@ from app.core.audit import (
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 init_db()
+
+WATCH_PATH = os.getenv("WATCH_PATH", "/monitored")
 
 
 class IncidentIn(BaseModel):
@@ -65,15 +68,24 @@ async def report_incident(payload: IncidentIn):
 
 @router.post("/reset-lockdown")
 async def reset_lockdown():
-    """Сбрасывает lockdown — разблокирует директорию для новых тестов."""
-    import subprocess
-    import os
-
-    watch_path = os.getenv("WATCH_PATH", "/monitored")
-
-    log_audit(event="LOCKDOWN_RESET", detail="Manual reset via API", host="api")
-
-    return {"status": "ok", "message": f"Lockdown reset. {watch_path} unlocked."}
+    """
+    Сбрасывает lockdown — восстанавливает права директории.
+    Вызывается скриптом симуляции перед каждым тестом.
+    """
+    try:
+        # chmod внутри контейнера backend (путь /monitored примонтирован)
+        subprocess.run(
+            ["chmod", "-R", "755", WATCH_PATH],
+            check=False, capture_output=True
+        )
+        log_audit(
+            event="LOCKDOWN_RESET",
+            detail=f"Manual reset via API. path={WATCH_PATH}",
+            host="api"
+        )
+        return {"status": "ok", "message": f"Lockdown reset. {WATCH_PATH} → 755"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @router.get("/list")

@@ -64,6 +64,7 @@ services:
     volumes:
       - ./backend:/app
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     ports:
       - "8000:8000"
     networks:
@@ -88,7 +89,7 @@ services:
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5}
     volumes:
       - ./agent:/app
-      - ${WATCH_PATH:-/tmp/monitored}:/monitored:ro
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     networks:
       - backend_net
     depends_on:
@@ -109,7 +110,7 @@ services:
       BACKEND_URL: http://backend:8000
     volumes:
       - borg_repo:/repo
-      - ${WATCH_PATH:-/tmp/monitored}:/monitored:ro
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     networks:
       - backend_net
     depends_on:

@@ -68,9 +68,9 @@ echo ""
 echo -e "${GRN}[RESULT] Waiting for detection (10s)...${NC}"
 sleep 10
 
-BEFORE=99
-TOTAL=$(curl -s "http://localhost:8000/incidents/list?limit=200" | \
-    python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+BEFORE=$(curl -s "http://localhost:8000/incidents/list?limit=200" |     python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+sleep 15
+TOTAL=$(curl -s "http://localhost:8000/incidents/list?limit=200" |     python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
 NEW=$((TOTAL - BEFORE))
 
 LATEST=$(curl -s "http://localhost:8000/incidents/list?limit=1" | \
