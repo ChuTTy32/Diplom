@@ -34,6 +34,24 @@ if ! curl -sf "$BACKEND/health" > /dev/null 2>&1; then
 fi
 ok "Backend online: $BACKEND"
 
+# ── Ждём агента: метрики идут = watchdog/eBPF готовы ──────────────────
+# После рестарта агент компилирует BPF ~20с — атака в этот период
+# пройдёт мимо детекции. Свежая system-метрика = агент жив.
+log "Waiting for agent (system metrics)..."
+AGENT_UP=0
+for _ in $(seq 1 20); do
+    CNT=$(curl -sf "$BACKEND/metrics/system?minutes=1" \
+        | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
+    if [ "${CNT:-0}" -gt 0 ]; then AGENT_UP=1; break; fi
+    sleep 2
+done
+if [ "$AGENT_UP" = 1 ]; then
+    ok "Agent online (metrics flowing)"
+else
+    warn "Агент не прислал метрик за 40с — детекция может не сработать"
+    warn "  Проверьте: docker compose logs agent --tail=20"
+fi
+
 # ── Фиксируем baseline до симуляции ───────────────────────────────────
 BEFORE=$(curl -sf "$BACKEND/incidents/list?limit=500" \
     | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
@@ -45,8 +63,11 @@ log "Resetting lockdown + preparing directory..."
 curl -sf -X POST "$BACKEND/incidents/reset-lockdown" > /dev/null
 # Восстанавливаем права если lockdown успел сработать в прошлый раз
 chmod -R 755 "$WATCH_DIR" 2>/dev/null || true
+# Удаляем артефакты прошлых прогонов — старые .locked/.enc заново
+# триггерят алерты при первом скане после рестарта агента
+rm -rf "$WATCH_DIR/documents"
 mkdir -p "$WATCH_DIR/documents"
-ok "Ready. watch_dir=$WATCH_DIR"
+ok "Ready. watch_dir=$WATCH_DIR (старые демо-файлы удалены)"
 sleep 1
 
 # ── ФАЗА 1: нормальные файлы (низкая энтропия) ────────────────────────
