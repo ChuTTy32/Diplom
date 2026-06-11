@@ -89,6 +89,46 @@ SUSPECT_WRITES        = 50      # записей в окне → подозри�
 SUSPECT_BYTES_PER_SEC = 5 * 1024 * 1024  # 5 MB/s → подозрительно
 COOLDOWN_SEC          = 30      # не повторять алерт для того же PID раньше
 
+# ─── Whitelist процессов ───────────────────────────────────────────────
+# comm в Linux обрезается до 15 символов (TASK_COMM_LEN - 1).
+# Легитимные процессы с высокой частотой записи не должны триггерить алерт,
+# если они не пишут в файлы с подозрительными расширениями.
+_PROC_WHITELIST: frozenset[str] = frozenset({
+    # Компиляторы и сборка
+    "gcc", "cc", "cc1", "cc1plus", "g++", "c++", "collect2",
+    "clang", "clang++", "lld", "ld", "as", "ar", "ranlib", "objcopy",
+    "make", "cmake", "ninja", "meson", "bazel", "scons",
+    # Интерпретаторы
+    "python3", "python3.11", "python3.12", "python", "pip3", "pip",
+    "node", "npm", "yarn", "pnpm", "bun", "deno",
+    # Системы сборки языков
+    "rustc", "cargo", "go", "gofmt", "javac", "kotlinc",
+    # Системы контроля версий
+    "git", "git-upload-pac", "git-remote-htt", "svn", "hg",
+    # Пакетные менеджеры
+    "apt", "apt-get", "dpkg", "rpm", "yum", "dnf",
+    # Редакторы
+    "vim", "vi", "nano", "emacs", "code", "gedit",
+    # Утилиты копирования и архивации
+    "cp", "mv", "rsync", "tar", "gzip", "bzip2", "xz", "zip",
+    # Наш собственный бэкап-агент
+    "borg",
+    # Системные
+    "systemd", "journald", "dockerd", "containerd", "postgres",
+    "sqlite3", "mysqld", "mongod",
+    # Агент мониторинга (сам себя не должен детектить)
+    "python3", "agent",
+})
+
+# Расширения файлов — признак ransomware.
+# Пробивают whitelist: даже gcc, пишущий ".locked" — подозрительно.
+_SUSPICIOUS_EXTENSIONS: frozenset[str] = frozenset({
+    ".locked", ".enc", ".encrypted", ".crypto", ".crypt",
+    ".ransom", ".wnry", ".wncry", ".zepto", ".cerber",
+    ".crypted", ".cryp1", ".aaa", ".abc", ".xyz",
+    ".cryptolocker", ".vault", ".pay2decrypt",
+})
+
 
 class EBPFMonitor:
     """
@@ -159,6 +199,25 @@ class EBPFMonitor:
 
     # ──────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_suspicious_ext(fname: str) -> bool:
+        """True если расширение файла типично для ransomware-шифровальщика."""
+        dot = fname.rfind(".")
+        if dot == -1:
+            return False
+        return fname[dot:].lower() in _SUSPICIOUS_EXTENSIONS
+
+    @staticmethod
+    def _is_whitelisted(comm: str, fname: str) -> bool:
+        """
+        True если процесс легитимен И файл не имеет подозрительного расширения.
+        Whitelist пробивается ransomware-расширениями — даже gcc не должен
+        писать .locked файлы.
+        """
+        if EBPFMonitor._is_suspicious_ext(fname):
+            return False
+        return comm in _PROC_WHITELIST
+
     def _handle_event(self, cpu, data, size):
         event = self._b["write_events"].event(data)  # type: ignore
         pid   = event.pid
@@ -167,10 +226,14 @@ class EBPFMonitor:
         fname = event.fname.decode("utf-8", errors="replace").strip("\x00")
         comm  = event.comm.decode("utf-8", errors="replace").strip("\x00")
 
+        # Легитимный процесс без подозрительного расширения → пропускаем
+        if self._is_whitelisted(comm, fname):
+            return
+
         dq = self._pid_window[pid]
         dq.append((now, event.bytes, fname, comm))
 
-        # Обрезаем окно
+        # Обрезаем скользящее окно
         cutoff = now - WINDOW_SEC
         while dq and dq[0][0] < cutoff:
             dq.popleft()
@@ -180,19 +243,24 @@ class EBPFMonitor:
         total_bytes = sum(e[1] for e in dq)
         bps         = total_bytes / WINDOW_SEC
 
+        # Подозрительно: высокая частота записи ИЛИ ransomware-расширение
         suspicious = (
-            write_count >= SUSPECT_WRITES or
-            bps >= SUSPECT_BYTES_PER_SEC
+            write_count >= SUSPECT_WRITES
+            or bps >= SUSPECT_BYTES_PER_SEC
+            or self._is_suspicious_ext(fname)
         )
 
         if suspicious:
             last = self._last_alert.get(pid, 0)
             if now - last >= COOLDOWN_SEC:
                 self._last_alert[pid] = now
+                reason = (
+                    "suspicious_ext" if self._is_suspicious_ext(fname)
+                    else f"writes={write_count} bps={bps/1024:.0f}KB/s"
+                )
                 log.warning(
                     f"[eBPF] SUSPECT pid={pid} comm={comm} "
-                    f"writes={write_count}/{WINDOW_SEC}s "
-                    f"bps={bps/1024:.0f} KB/s file={fname}"
+                    f"reason={reason} file={fname}"
                 )
                 self._callback(
                     pid=pid,
