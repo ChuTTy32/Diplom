@@ -94,11 +94,17 @@ echo ""
 for i in {1..6}; do
     SIZE=$((32 + RANDOM % 96))
     FILE="$WATCH_DIR/documents/encrypted_${i}.locked"
-    dd if=/dev/urandom of="$FILE" bs=1024 count="$SIZE" 2>/dev/null
+    # В медленном режиме lockdown может сработать уже здесь —
+    # защита быстрее атаки, это успех, а не ошибка скрипта
+    if ! dd if=/dev/urandom of="$FILE" bs=1024 count="$SIZE" 2>/dev/null; then
+        warn "Запись заблокирована — lockdown сработал во время Phase 2"
+        warn "Защита опередила атаку: директория уже read-only"
+        break
+    fi
     log "${RED}encrypted_${i}.locked${NC} ${DIM}(${SIZE} KB, H≈8.0)${NC}"
     sleep "$DELAY"
 done
-ok "6 зашифрованных файлов. Агент должен зарегистрировать алерты (H > 7.2)"
+ok "Фаза 2 завершена. Агент должен зарегистрировать алерты (H > 7.2)"
 
 # ── ФАЗА 3: массовое шифрование — триггер lockdown ────────────────────
 echo ""
