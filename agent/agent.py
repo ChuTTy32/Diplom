@@ -46,11 +46,18 @@ ATTACK_THRESHOLD  = 3
 LOCKDOWN_DURATION = 60  # секунд до автосброса lockdown
 RESPONSE_COOLDOWN = 10  # минимум секунд между реакциями (эскалация разрешена)
 
+# Зеркала порогов lockdown из backend-policy (app/core/policy.py) —
+# фоновый эскалатор должен знать, когда burst дорос до блокировки
+ESCALATION_ALERT_COUNT = 10
+ESCALATION_ENTROPY     = 7.9
+
 alert_timestamps: list = []
 alert_lock = threading.Lock()
 lockdown_active = False                          # реальный lockdown (chmod 444)
 lockdown_timer: threading.Timer | None = None
 _last_response_ts = 0.0                          # время последней реакции
+_last_alert_file    = ""                         # последний алерт — для эскалатора
+_last_alert_entropy = 0.0
 
 
 # ─── Энтропия Шеннона ────────────────────────────────────────────────
@@ -230,11 +237,13 @@ def trigger_emergency_backup():
 
 
 def register_alert(file_path: str, entropy: float):
-    global _last_response_ts
+    global _last_response_ts, _last_alert_file, _last_alert_entropy
     now = time.time()
 
     with alert_lock:
         alert_timestamps.append(now)
+        _last_alert_file = file_path
+        _last_alert_entropy = entropy
         cutoff = now - ATTACK_WINDOW_SEC
         while alert_timestamps and alert_timestamps[0] < cutoff:
             alert_timestamps.pop(0)
@@ -255,6 +264,38 @@ def register_alert(file_path: str, entropy: float):
         args=(file_path, entropy, count),
         daemon=True,
     ).start()
+
+
+def _escalation_loop():
+    """
+    Фоновая эскалация. Событийный путь (register_alert) срабатывает только
+    при ПОСТУПЛЕНИИ алерта: если burst целиком попал в кулдаун-окно после
+    первой реакции, а новых событий нет, окно с count >= порога lockdown
+    осталось бы без ответа. Раз в 2с перепроверяем и доводим до lockdown.
+    """
+    global _last_response_ts
+    while True:
+        time.sleep(2)
+        now = time.time()
+        with alert_lock:
+            cutoff = now - ATTACK_WINDOW_SEC
+            while alert_timestamps and alert_timestamps[0] < cutoff:
+                alert_timestamps.pop(0)
+            count = len(alert_timestamps)
+
+            if lockdown_active or count < ATTACK_THRESHOLD:
+                continue
+            if now - _last_response_ts < RESPONSE_COOLDOWN:
+                continue
+            # Эскалируем только если burst дорос до уровня lockdown —
+            # иначе плодили бы дубликаты emergency_backup каждый кулдаун
+            if count < ESCALATION_ALERT_COUNT and _last_alert_entropy < ESCALATION_ENTROPY:
+                continue
+            _last_response_ts = now
+            trigger, entropy = _last_alert_file, _last_alert_entropy
+
+        log.warning(f"⏫ Escalation: sustained burst count={count} → responding")
+        execute_response(trigger, entropy, count)
 
 
 def execute_response(trigger_file: str, entropy: float, alert_count: int,
@@ -397,6 +438,9 @@ def main():
 
     # ── Буфер метрик ────────────────────────────────────────────────
     threading.Thread(target=_flush_loop, daemon=True, name="buf-flush").start()
+
+    # ── Фоновая эскалация (burst в кулдаун-окне → lockdown) ─────────
+    threading.Thread(target=_escalation_loop, daemon=True, name="escalation").start()
 
     # ── eBPF (уровень ядра) ──────────────────────────────────────────
     ebpf = EBPFMonitor(on_suspect=on_ebpf_suspect)
