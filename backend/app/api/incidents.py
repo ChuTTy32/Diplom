@@ -4,16 +4,15 @@
 
 import os
 import subprocess
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from app.core.audit import (
-    init_db, log_incident, log_audit,
+    log_incident, log_audit,
     get_incidents, get_audit_log,
 )
+from app.core.limiter import limiter
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
-
-init_db()
 
 WATCH_PATH = os.getenv("WATCH_PATH", "/monitored")
 
@@ -33,7 +32,8 @@ class IncidentResponse(BaseModel):
 
 
 @router.post("/report", response_model=IncidentResponse)
-async def report_incident(payload: IncidentIn):
+@limiter.limit("60/minute")
+async def report_incident(request: Request, payload: IncidentIn):
     if payload.alert_count >= 10 or payload.entropy >= 7.9:
         action = "lockdown"
         message = "CRITICAL: lockdown initiated, emergency backup triggered"

@@ -31,7 +31,7 @@
 | Аудит | SQLite |
 | Резервное копирование | BorgBackup (WORM/append-only) |
 | VPN туннель | WireGuard |
-| Дашборд | Nuxt 3 + Vue 3 + Chart.js |
+| Дашборд | Nuxt 4 + Vue 3.5 + Chart.js |
 | Оркестрация | Docker + Docker Compose |
 
 ---
@@ -286,7 +286,7 @@ H(X) = -Σ p(x) · log₂(p(x))
 | Audit database | SQLite |
 | Backup | BorgBackup (WORM/append-only) |
 | VPN tunnel | WireGuard |
-| Dashboard | Nuxt 3 + Vue 3 + Chart.js |
+| Dashboard | Nuxt 4 + Vue 3.5 + Chart.js |
 | Orchestration | Docker + Docker Compose |
 
 ---

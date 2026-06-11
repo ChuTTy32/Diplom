@@ -73,6 +73,12 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ─── Python агент ────────────────────────────────────────────────────
   agent:
@@ -81,19 +87,32 @@ services:
       dockerfile: Dockerfile
     container_name: agent
     restart: unless-stopped
+    # privileged + монтирование ядра — требования для eBPF kprobe
+    privileged: true
+    cap_add:
+      - CAP_BPF
+      - CAP_PERFMON
+      - SYS_ADMIN
+    volumes:
+      - ./agent:/app
+      - ${WATCH_PATH:-/tmp/monitored}:/monitored
+      # Заголовки ядра хоста — bcc компилирует BPF под текущее ядро
+      - /usr/src:/usr/src:ro
+      - /lib/modules:/lib/modules:ro
+      # debugfs / tracefs — perf_buffer + kprobe
+      - /sys/kernel/debug:/sys/kernel/debug:rw
+      - /sys/kernel/tracing:/sys/kernel/tracing:rw
     env_file: .env
     environment:
       BACKEND_URL: http://backend:8000
       WATCH_PATH: /monitored
       ENTROPY_THRESHOLD: ${ENTROPY_THRESHOLD:-7.2}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5}
-    volumes:
-      - ./agent:/app
-      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     networks:
       - backend_net
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   # ─── BorgBackup ──────────────────────────────────────────────────────
   borg:

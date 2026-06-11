@@ -27,5 +27,3 @@ node_modules/
 wireguard/config/*.key
 wireguard/config/wg1.conf
 wireguard/config/wg0*.conf
-setup.sh
-setup_frontend.sh

@@ -67,8 +67,9 @@
 
     <!-- ─── TABLES ─────────────────────────────────────────────────── -->
     <section class="tables-grid">
-      <AlertTable  :alerts="alertRows" />
-      <BackupTable :events="backupEvents" />
+      <AlertTable    :alerts="alertRows" />
+      <BackupTable   :events="backupEvents" />
+      <IncidentTable :incidents="incidentRows" />
     </section>
 
     <!-- ─── FOOTER ─────────────────────────────────────────────────── -->
@@ -84,31 +85,34 @@
 const THRESHOLD = 7.2
 
 // ─── State ────────────────────────────────────────────────────────────
-const connected    = ref(false)
-const clock        = ref('')
-const summary      = ref<any>({})
+const connected     = ref(false)
+const clock         = ref('')
+const summary       = ref<any>({})
 const entropyPoints = ref<any[]>([])
 const systemPoints  = ref<any[]>([])
 const alertRows     = ref<any[]>([])
 const backupEvents  = ref<any[]>([])
+const incidentRows  = ref<any[]>([])
 
 // ─── API ──────────────────────────────────────────────────────────────
 const { get } = useApi()
 
 async function fetchAll() {
   try {
-    const [sum, entropy, backup, system] = await Promise.all([
+    const [sum, entropy, backup, system, incidents] = await Promise.all([
       get<any>('/metrics/summary'),
-      get<any[]>('/metrics/entropy', { minutes: 60 }),
-      get<any[]>('/metrics/backup',  { limit: 30 }),
-      get<any[]>('/metrics/system',  { minutes: 30 }),
+      get<any[]>('/metrics/entropy',  { minutes: 60 }),
+      get<any[]>('/metrics/backup',   { limit: 30 }),
+      get<any[]>('/metrics/system',   { minutes: 30 }),
+      get<any[]>('/incidents/list',   { limit: 30 }),
     ])
-    summary.value      = sum
+    summary.value       = sum
     entropyPoints.value = entropy
-    alertRows.value    = entropy.filter((e: any) => e.alert).slice(0, 50)
-    backupEvents.value = backup
-    systemPoints.value = system
-    connected.value    = true
+    alertRows.value     = entropy.filter((e: any) => e.alert).slice(0, 50)
+    backupEvents.value  = backup
+    systemPoints.value  = system
+    incidentRows.value  = incidents
+    connected.value     = true
   } catch {
     connected.value = false
   }
@@ -230,12 +234,16 @@ onMounted(() => {
 
 .tables-grid {
   display: grid;
+  /* AlertTable + BackupTable рядом, IncidentTable на всю ширину снизу */
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
   gap: 1px;
   background: var(--border);
   flex: 1;
 }
 .tables-grid > * { background: var(--bg2); }
+/* IncidentTable — третий элемент, растягиваем на обе колонки */
+.tables-grid > *:nth-child(3) { grid-column: 1 / -1; }
 
 /* ─── Footer ─── */
 .footer {

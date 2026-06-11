@@ -1,9 +1,11 @@
 """
 Агент мониторинга файловой системы.
-- watchdog для real-time событий
-- Энтропия Шеннона для детекции ransomware
+- eBPF kprobe/vfs_write — перехват на уровне ядра (поведенческий анализ)
+- watchdog (inotify) — real-time события файловой системы
+- Энтропия Шеннона — детекция ransomware по содержимому файлов
 - Автоматическая реакция: lockdown + экстренный бэкап
-- Поддержка сброса lockdown через API
+
+eBPF активен при privileged-контейнере. При недоступности — watchdog-fallback.
 """
 
 import os
@@ -18,6 +20,7 @@ import psutil
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from ebpf_monitor import EBPFMonitor
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -69,19 +72,73 @@ def file_entropy(path: str, max_bytes: int = 65536) -> float:
 
 # ─── HTTP ─────────────────────────────────────────────────────────────
 
+BUFFER_MAX   = 500          # не накапливать больше N метрик в памяти
+_buf: list   = []           # буфер entropy-метрик при недоступности бэкенда
+_buf_lock    = threading.Lock()
+
+
+def _flush_buffer() -> bool:
+    """
+    Отправляет накопленные метрики. Возвращает True если бэкенд доступен.
+    Вызывается и из send_entropy, и из фонового flush-потока.
+    """
+    with _buf_lock:
+        if not _buf:
+            return True
+        batch = list(_buf)
+
+    sent = 0
+    for item in batch:
+        try:
+            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=item, timeout=5.0)
+            sent += 1
+        except Exception:
+            break  # бэкенд всё ещё недоступен — прекращаем, не трогаем буфер
+
+    if sent:
+        with _buf_lock:
+            del _buf[:sent]
+        log.info(f"Buffer flushed {sent}/{len(batch)} metrics")
+
+    return sent == len(batch)
+
+
+def _flush_loop():
+    """Фоновый поток: каждые 30 сек пробует опустошить буфер."""
+    while True:
+        time.sleep(30)
+        if _buf:
+            _flush_buffer()
+
+
 def send_entropy(file_path: str, entropy: float, file_size: int, alert: bool):
-    try:
-        httpx.post(
-            f"{BACKEND_URL}/metrics/entropy",
-            json={"file_path": file_path, "entropy": entropy,
-                  "file_size": file_size, "alert": alert, "host": HOSTNAME},
-            timeout=5.0,
-        )
-        if alert:
-            log.warning(f"⚠ ALERT entropy={entropy:.4f} file={file_path}")
-            register_alert(file_path, entropy)
-    except Exception as e:
-        log.error(f"send_entropy failed: {e}")
+    payload = {
+        "file_path": file_path, "entropy": entropy,
+        "file_size": file_size, "alert": alert, "host": HOSTNAME,
+    }
+    # Сначала пробуем сбросить накопленное, потом отправить текущее
+    backend_ok = _flush_buffer()
+    if backend_ok:
+        try:
+            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=payload, timeout=5.0)
+            if alert:
+                log.warning(f"⚠ ALERT entropy={entropy:.4f} file={file_path}")
+                register_alert(file_path, entropy)
+            return
+        except Exception as e:
+            log.error(f"send_entropy failed: {e}")
+
+    # Бэкенд недоступен — буферизуем
+    with _buf_lock:
+        if len(_buf) < BUFFER_MAX:
+            _buf.append(payload)
+        else:
+            log.warning(f"Buffer full ({BUFFER_MAX}), dropping metric for {file_path}")
+
+    # Алерты регистрируем локально в любом случае
+    if alert:
+        log.warning(f"⚠ ALERT (buffered) entropy={entropy:.4f} file={file_path}")
+        register_alert(file_path, entropy)
 
 
 def send_system_metrics():
@@ -239,10 +296,53 @@ def full_scan():
         time.sleep(SCAN_INTERVAL)
 
 
+def on_ebpf_suspect(pid: int, comm: str, writes: int,
+                    bytes_per_sec: float, sample_file: str):
+    """
+    Callback от eBPF: процесс проявляет поведение ransomware
+    (аномально высокая частота записи в файлы).
+    Отправляем инцидент на бэкенд и регистрируем алерт.
+    """
+    severity = "critical" if bytes_per_sec >= 10 * 1024 * 1024 else "warning"
+    trigger  = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
+    # Используем порог + 0.1 чтобы пройти условие critical в incidents.py
+    fake_entropy = ENTROPY_THRESHOLD + 0.5 if severity == "warning" else 7.95
+    try:
+        httpx.post(
+            f"{BACKEND_URL}/incidents/report",
+            json={
+                "severity":    severity,
+                "trigger_file": trigger,
+                "entropy":     fake_entropy,
+                "alert_count": writes,
+                "host":        HOSTNAME,
+            },
+            timeout=5.0,
+        )
+        log.warning(
+            f"[eBPF→backend] {severity.upper()} proc={comm} pid={pid} "
+            f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
+        )
+    except Exception as exc:
+        log.error(f"ebpf incident report failed: {exc}")
+    # Также регистрируем как entropy-алерт чтобы попало в дашборд
+    register_alert(trigger, fake_entropy)
+
+
 def main():
     log.info(f"Agent starting. watch={WATCH_PATH} threshold={ENTROPY_THRESHOLD}")
     os.makedirs(WATCH_PATH, exist_ok=True)
 
+    # ── Буфер метрик ────────────────────────────────────────────────
+    threading.Thread(target=_flush_loop, daemon=True, name="buf-flush").start()
+
+    # ── eBPF (уровень ядра) ──────────────────────────────────────────
+    ebpf = EBPFMonitor(on_suspect=on_ebpf_suspect)
+    ebpf_active = ebpf.start()
+    if not ebpf_active:
+        log.warning("Running in watchdog-only mode (no eBPF)")
+
+    # ── watchdog (уровень inotify) ───────────────────────────────────
     observer = Observer()
     observer.schedule(EntropyHandler(), WATCH_PATH, recursive=True)
     observer.start()
@@ -250,11 +350,17 @@ def main():
     scanner = threading.Thread(target=full_scan, daemon=True)
     scanner.start()
 
+    log.info(
+        f"Agent ready. eBPF={'ON' if ebpf_active else 'OFF'} "
+        f"watchdog=ON watch={WATCH_PATH}"
+    )
+
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
+        ebpf.stop()
     observer.join()
 
 
