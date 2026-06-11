@@ -1,8 +1,8 @@
 <template>
   <div class="chart-wrap">
     <div class="chart-header">
-      <span class="mono">ENTROPY_STREAM</span>
-      <span class="mono dim" style="font-size:10px">threshold={{ threshold }}</span>
+      <span class="mono">ЭНТРОПИЯ ФАЙЛОВ (H, бит)</span>
+      <span class="mono dim" style="font-size:10px">порог = {{ threshold }}</span>
     </div>
     <canvas ref="canvas" />
   </div>
@@ -32,11 +32,11 @@ function buildChart() {
       responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
       plugins: {
         legend: { display: false },
-        tooltip: { backgroundColor: '#0e1118', borderColor: '#1e2530', borderWidth: 1, titleColor: '#7ab3c8', bodyColor: '#c8d4e0', titleFont: { family: 'Share Tech Mono' }, bodyFont: { family: 'Share Tech Mono' }, callbacks: { title: (i) => new Date(i[0].label).toLocaleTimeString(), label: (i) => ` H = ${Number(i.raw).toFixed(4)}` } },
+        tooltip: { backgroundColor: '#0e1118', borderColor: '#1e2530', borderWidth: 1, titleColor: '#7ab3c8', bodyColor: '#c8d4e0', titleFont: { family: 'JetBrains Mono' }, bodyFont: { family: 'JetBrains Mono' }, callbacks: { title: (i) => new Date(i[0].label).toLocaleTimeString(), label: (i) => ` H = ${Number(i.raw).toFixed(4)}` } },
       },
       scales: {
-        x: { type: 'category', ticks: { color: '#4a5a6a', font: { family: 'Share Tech Mono', size: 10 }, maxTicksLimit: 8, maxRotation: 0, callback: (_, i, ticks) => { const l = ticks[i]?.label; return l ? new Date(l).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '' } }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
-        y: { min: 0, max: 8.5, ticks: { color: '#4a5a6a', font: { family: 'Share Tech Mono', size: 10 }, stepSize: 1 }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
+        x: { type: 'category', ticks: { color: '#4a5a6a', font: { family: 'JetBrains Mono', size: 10 }, maxTicksLimit: 8, maxRotation: 0, callback: (_, i, ticks) => { const l = ticks[i]?.label; return l ? new Date(l).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '' } }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
+        y: { min: 0, max: 8.5, ticks: { color: '#4a5a6a', font: { family: 'JetBrains Mono', size: 10 }, stepSize: 1 }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
       },
     },
     plugins: [{ id: 'thr', afterDraw(c) { const { ctx, chartArea, scales } = c; const y = scales.y.getPixelForValue(props.threshold); ctx.save(); ctx.setLineDash([4,4]); ctx.strokeStyle = 'rgba(255,170,0,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(chartArea.left, y); ctx.lineTo(chartArea.right, y); ctx.stroke(); ctx.restore(); } }],

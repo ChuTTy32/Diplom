@@ -14,8 +14,8 @@
   --warn:      #ffaa00;
   --ok:        #00e676;
   --ok2:       #00a152;
-  --font-mono: 'Share Tech Mono', monospace;
-  --font-body: 'Barlow', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-body: 'Inter', sans-serif;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {

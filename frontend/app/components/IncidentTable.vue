@@ -1,21 +1,21 @@
 <template>
   <div class="table-wrap">
     <div class="table-header">
-      <span class="mono">INCIDENT_LOG</span>
+      <span class="mono">ЖУРНАЛ ИНЦИДЕНТОВ</span>
       <span class="badge mono" :class="hasCritical ? 'critical' : hasWarning ? 'warning' : 'ok'">
-        {{ hasCritical ? 'CRITICAL' : hasWarning ? 'WARNING' : 'CLEAR' }}
+        {{ hasCritical ? 'КРИТИЧНО' : hasWarning ? 'ВНИМАНИЕ' : 'ЧИСТО' }}
       </span>
     </div>
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th class="mono">TIME</th>
-            <th class="mono">SEV</th>
-            <th class="mono">ACTION</th>
-            <th class="mono">TRIGGER</th>
-            <th class="mono">ENTROPY</th>
-            <th class="mono">HOST</th>
+            <th class="mono">ВРЕМЯ</th>
+            <th class="mono">УРОВЕНЬ</th>
+            <th class="mono">ДЕЙСТВИЕ</th>
+            <th class="mono">ТРИГГЕР</th>
+            <th class="mono">ЭНТРОПИЯ</th>
+            <th class="mono">ХОСТ</th>
           </tr>
         </thead>
         <tbody>
@@ -27,11 +27,11 @@
             <td class="mono time-cell">{{ fmtTime(row.time) }}</td>
             <td>
               <span class="sev-badge mono" :class="row.severity">
-                {{ row.severity.toUpperCase() }}
+                {{ sevLabel(row.severity) }}
               </span>
             </td>
             <td class="mono action-cell" :class="actionClass(row.action_taken)">
-              {{ row.action_taken }}
+              {{ actionLabel(row.action_taken) }}
             </td>
             <td class="trigger-cell" :title="row.trigger_file">
               {{ shortTrigger(row.trigger_file) }}
@@ -42,7 +42,7 @@
             <td class="mono dim">{{ row.host }}</td>
           </tr>
           <tr v-if="!incidents.length">
-            <td colspan="6" class="no-data mono dim">— no incidents —</td>
+            <td colspan="6" class="no-data mono dim">— инцидентов нет —</td>
           </tr>
         </tbody>
       </table>
@@ -83,6 +83,13 @@ const actionClass = (a: string) => {
   if (a === 'emergency_backup') return 'warn'
   return 'dim'
 }
+
+// Значения в БД остаются англ. (API-контракт), на экране — русский
+const sevLabel = (s: string) =>
+  ({ critical: 'КРИТИЧНО', warning: 'ПРЕДУПР.' }[s] ?? s.toUpperCase())
+
+const actionLabel = (a: string) =>
+  ({ lockdown: 'БЛОКИРОВКА', emergency_backup: 'ЭКСТР. БЭКАП', logged: 'ЗАПИСАНО' }[a] ?? a)
 
 const eClass = (e: number | null) => {
   if (e == null) return 'dim'

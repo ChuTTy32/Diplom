@@ -7,13 +7,13 @@
         <span class="logo mono accent">RG</span>
         <div>
           <div class="title">RANSOMGUARD</div>
-          <div class="subtitle mono dim">backup protection system v1.0</div>
+          <div class="subtitle mono dim">система защиты резервных копий v1.0</div>
         </div>
       </div>
       <div class="header-right">
         <div class="pulse-dot" :class="connected ? 'pulse-ok' : 'pulse-err'" />
         <span class="mono dim" style="font-size:11px">
-          {{ connected ? 'CONNECTED' : 'OFFLINE' }}
+          {{ connected ? 'ПОДКЛЮЧЕНО' : 'НЕТ СВЯЗИ' }}
         </span>
         <span class="clock mono">{{ clock }}</span>
       </div>
@@ -22,39 +22,39 @@
     <!-- ─── STAT CARDS ─────────────────────────────────────────────── -->
     <section class="stats-grid">
       <StatCard
-        label="alerts_24h"
+        label="Алерты (24ч)"
         :value="summary.total_alerts ?? '—'"
-        :sub="summary.last_alert_time ? 'last: ' + fmtRelative(summary.last_alert_time) : 'no alerts'"
+        :sub="summary.last_alert_time ? 'последний: ' + fmtRelative(summary.last_alert_time) : 'алертов нет'"
         :variant="(summary.total_alerts ?? 0) > 0 ? 'danger' : 'ok'"
       />
       <StatCard
-        label="avg_entropy_1h"
+        label="Энтропия (ср. за 1ч)"
         :value="summary.avg_entropy_1h != null ? summary.avg_entropy_1h.toFixed(4) : '—'"
-        :sub="'threshold: ' + THRESHOLD"
+        :sub="'порог: ' + THRESHOLD + ' бит'"
         :variant="(summary.avg_entropy_1h ?? 0) >= THRESHOLD ? 'danger' : 'ok'"
       />
       <StatCard
-        label="rpo_actual"
-        :value="summary.rpo_minutes != null ? summary.rpo_minutes + ' min' : '—'"
-        sub="recovery point objective"
+        label="RPO (факт)"
+        :value="summary.rpo_minutes != null ? summary.rpo_minutes + ' мин' : '—'"
+        sub="точка восстановления"
         :variant="rpoVariant"
       />
       <StatCard
-        label="rto_estimate"
-        :value="summary.rto_minutes != null ? summary.rto_minutes + ' min' : '—'"
-        sub="recovery time objective"
+        label="RTO (оценка)"
+        :value="summary.rto_minutes != null ? summary.rto_minutes + ' мин' : '—'"
+        sub="время восстановления"
         variant="accent"
       />
       <StatCard
-        label="last_backup"
+        label="Последний бэкап"
         :value="summary.last_backup ? fmtRelative(summary.last_backup) : '—'"
-        sub="borgbackup worm"
+        sub="BorgBackup WORM"
         :variant="lastBackupVariant"
       />
       <StatCard
-        label="monitored_files"
+        label="События файлов"
         :value="entropyPoints.length"
-        sub="unique events / 60min"
+        sub="уникальных за 60 мин"
         variant=""
       />
     </section>
@@ -75,7 +75,7 @@
     <!-- ─── FOOTER ─────────────────────────────────────────────────── -->
     <footer class="footer mono dim">
       НГАСУ (Сибстрин) · ВКР 09.03.02 · Защищённая система резервного копирования
-      <span style="float:right">polling: 5s · {{ fmtTime(new Date().toISOString()) }}</span>
+      <span style="float:right">опрос: 5с · {{ fmtTime(new Date().toISOString()) }}</span>
     </footer>
 
   </div>
@@ -124,9 +124,9 @@ function fmtTime(t: string) {
 }
 function fmtRelative(t: string) {
   const diff = Math.floor((Date.now() - new Date(t).getTime()) / 1000)
-  if (diff < 60) return diff + 's ago'
-  if (diff < 3600) return Math.floor(diff / 60) + 'm ago'
-  return Math.floor(diff / 3600) + 'h ago'
+  if (diff < 60) return diff + ' с назад'
+  if (diff < 3600) return Math.floor(diff / 60) + ' мин назад'
+  return Math.floor(diff / 3600) + ' ч назад'
 }
 
 const rpoVariant = computed(() => {

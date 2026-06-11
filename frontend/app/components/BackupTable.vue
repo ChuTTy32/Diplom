@@ -1,19 +1,19 @@
 <template>
   <div class="table-wrap">
-    <div class="table-header mono">BACKUP_EVENTS</div>
+    <div class="table-header mono">СОБЫТИЯ БЭКАПОВ</div>
     <div class="table-scroll">
       <table>
-        <thead><tr><th class="mono">TIME</th><th class="mono">STATUS</th><th class="mono">ARCHIVE</th><th class="mono">DURATION</th><th class="mono">RPO</th><th class="mono">RTO</th></tr></thead>
+        <thead><tr><th class="mono">ВРЕМЯ</th><th class="mono">СТАТУС</th><th class="mono">АРХИВ</th><th class="mono">ДЛИТ.</th><th class="mono">RPO</th><th class="mono">RTO</th></tr></thead>
         <tbody>
           <tr v-for="row in events" :key="row.time">
             <td class="mono time-cell">{{ fmtTime(row.time) }}</td>
-            <td><span class="status-badge mono" :class="row.event_type">{{ row.event_type.toUpperCase() }}</span></td>
+            <td><span class="status-badge mono" :class="row.event_type">{{ statusLabel(row.event_type) }}</span></td>
             <td class="mono dim archive-cell" :title="row.archive_name">{{ shortArchive(row.archive_name) }}</td>
-            <td class="mono">{{ row.duration_sec != null ? row.duration_sec+'s' : '—' }}</td>
-            <td class="mono" :class="rpoClass(row.rpo_minutes)">{{ row.rpo_minutes != null ? row.rpo_minutes+'m' : '—' }}</td>
-            <td class="mono dim">{{ row.rto_minutes != null ? row.rto_minutes+'m' : '—' }}</td>
+            <td class="mono">{{ row.duration_sec != null ? row.duration_sec+' с' : '—' }}</td>
+            <td class="mono" :class="rpoClass(row.rpo_minutes)">{{ row.rpo_minutes != null ? row.rpo_minutes+' мин' : '—' }}</td>
+            <td class="mono dim">{{ row.rto_minutes != null ? row.rto_minutes+' мин' : '—' }}</td>
           </tr>
-          <tr v-if="!events.length"><td colspan="6" class="no-data mono dim">— no backup events —</td></tr>
+          <tr v-if="!events.length"><td colspan="6" class="no-data mono dim">— событий нет —</td></tr>
         </tbody>
       </table>
     </div>
@@ -24,6 +24,8 @@ defineProps<{ events: Array<{ time: string; event_type: string; archive_name: st
 const fmtTime = (t: string) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const shortArchive = (n: string|null) => { if (!n) return '—'; const p = n.split('::'); return p[1] || n }
 const rpoClass = (m: number|null) => m == null ? 'dim' : m > 60 ? 'danger' : m > 15 ? 'warn' : 'ok'
+// event_type из БД остаётся англ. (CSS-классы), на экране — русский
+const statusLabel = (t: string) => ({ success: 'УСПЕХ', fail: 'ОШИБКА', start: 'СТАРТ' }[t] ?? t.toUpperCase())
 </script>
 <style scoped>
 .table-wrap { background: var(--bg2); border: 1px solid var(--border); display: flex; flex-direction: column; max-height: 260px; }

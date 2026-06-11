@@ -1,6 +1,6 @@
 <template>
   <div class="chart-wrap">
-    <div class="chart-header mono">SYSTEM_METRICS</div>
+    <div class="chart-header mono">СИСТЕМНЫЕ МЕТРИКИ</div>
     <canvas ref="canvas" />
   </div>
 </template>
@@ -16,15 +16,15 @@ function buildChart() {
     type: 'line',
     data: { labels: [], datasets: [
       { label: 'CPU',  data: [], borderColor: '#00d4ff', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 },
-      { label: 'RAM',  data: [], borderColor: '#ffaa00', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 },
-      { label: 'Disk', data: [], borderColor: '#00e676', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 },
+      { label: 'ОЗУ',  data: [], borderColor: '#ffaa00', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 },
+      { label: 'Диск', data: [], borderColor: '#00e676', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 },
     ]},
     options: {
       responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
-      plugins: { legend: { display: true, labels: { color: '#4a5a6a', font: { family: 'Share Tech Mono', size: 10 }, boxWidth: 12, padding: 16 } }, tooltip: { backgroundColor: '#0e1118', borderColor: '#1e2530', borderWidth: 1, titleColor: '#7ab3c8', bodyColor: '#c8d4e0', titleFont: { family: 'Share Tech Mono' }, bodyFont: { family: 'Share Tech Mono' }, callbacks: { title: (i) => new Date(i[0].label).toLocaleTimeString(), label: (i) => ` ${i.dataset.label}: ${Number(i.raw).toFixed(1)}%` } } },
+      plugins: { legend: { display: true, labels: { color: '#4a5a6a', font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 12, padding: 16 } }, tooltip: { backgroundColor: '#0e1118', borderColor: '#1e2530', borderWidth: 1, titleColor: '#7ab3c8', bodyColor: '#c8d4e0', titleFont: { family: 'JetBrains Mono' }, bodyFont: { family: 'JetBrains Mono' }, callbacks: { title: (i) => new Date(i[0].label).toLocaleTimeString(), label: (i) => ` ${i.dataset.label}: ${Number(i.raw).toFixed(1)}%` } } },
       scales: {
-        x: { type: 'category', ticks: { color: '#4a5a6a', font: { family: 'Share Tech Mono', size: 10 }, maxTicksLimit: 6, maxRotation: 0, callback: (_, i, ticks) => { const l = ticks[i]?.label; return l ? new Date(l).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '' } }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
-        y: { min: 0, max: 100, ticks: { color: '#4a5a6a', font: { family: 'Share Tech Mono', size: 10 }, callback: (v) => `${v}%` }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
+        x: { type: 'category', ticks: { color: '#4a5a6a', font: { family: 'JetBrains Mono', size: 10 }, maxTicksLimit: 6, maxRotation: 0, callback: (_, i, ticks) => { const l = ticks[i]?.label; return l ? new Date(l).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '' } }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
+        y: { min: 0, max: 100, ticks: { color: '#4a5a6a', font: { family: 'JetBrains Mono', size: 10 }, callback: (v) => `${v}%` }, grid: { color: '#1e2530' }, border: { color: '#1e2530' } },
       },
     },
   })
