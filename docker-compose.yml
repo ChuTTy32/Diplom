@@ -1,3 +1,17 @@
+# =============================================================================
+# RansomGuard — Docker Compose (single-host demo)
+#
+# Сетевая изоляция:
+#   backend_net  172.20.0.0/24  — внутренний трафик (agent, borg, tsdb, backend)
+#   frontend_net               — изолированная сеть UI
+#
+# Production multi-host сценарий (несколько машин):
+#   Трафик между агентами и backend шифруется через WireGuard VPN.
+#   Конфигурация: wireguard/ (ключи, скрипты, README).
+#   В single-host demo WireGuard не используется — все сервисы
+#   общаются по Docker bridge в изолированных сетях.
+# =============================================================================
+
 networks:
   backend_net:
     driver: bridge
@@ -10,7 +24,6 @@ networks:
 volumes:
   timescale_data:
   borg_repo:
-  wg_config:
 
 services:
 
@@ -34,21 +47,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ─── WireGuard VPN ───────────────────────────────────────────────────
-  wireguard:
-    build:
-      context: ./wireguard
-      dockerfile: Dockerfile
-    container_name: wireguard
-    restart: unless-stopped
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    volumes:
-      - ./wireguard/config:/etc/wireguard
-      - wg_config:/etc/wireguard/keys
 
   # ─── FastAPI backend ─────────────────────────────────────────────────
   backend:
@@ -81,13 +79,13 @@ services:
       start_period: 20s
 
   # ─── Python агент ────────────────────────────────────────────────────
+  # privileged + монтирование ядра — требования для eBPF kprobe/vfs_write
   agent:
     build:
       context: ./agent
       dockerfile: Dockerfile
     container_name: agent
     restart: unless-stopped
-    # privileged + монтирование ядра — требования для eBPF kprobe
     privileged: true
     cap_add:
       - CAP_BPF
@@ -96,11 +94,8 @@ services:
     volumes:
       - ./agent:/app
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
-      # Заголовки ядра хоста — bcc компилирует BPF под текущее ядро
       - /usr/src:/usr/src:ro
       - /lib/modules:/lib/modules:ro
-      # debugfs / tracefs — perf_buffer + kprobe
-      - /sys/kernel/debug:/sys/kernel/debug:rw
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
     env_file: .env
     environment:
