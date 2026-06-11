@@ -1,13 +1,26 @@
 <template>
   <div class="chart-wrap">
     <div class="chart-header">
-      <span class="mono">ЭНТРОПИЯ ФАЙЛОВ (H, бит)</span>
+      <span class="mono">
+        ЭНТРОПИЯ ФАЙЛОВ (H, бит)
+        <span class="info-tip" tabindex="0">ⓘ
+          <span class="tip-bubble">
+            <b>Энтропия Шеннона</b> H&nbsp;=&nbsp;−Σ&nbsp;p·log₂(p) — мера
+            случайности содержимого файла.<br><br>
+            Обычные документы и код — <b>3–5 бит</b>, сжатые архивы — ~7,
+            зашифрованные шифровальщиком данные — <b>почти 8 бит</b>
+            (все байты равновероятны).<br><br>
+            Превышение порога {{ threshold }} бит — признак шифрования:
+            агент регистрирует алерт.
+          </span>
+        </span>
+      </span>
       <span class="mono dim" style="font-size:10px">порог = {{ threshold }}</span>
     </div>
-    <div class="chart-note dim">
-      Мера случайности содержимого изменённых файлов (формула Шеннона).
-      Текст и код — 3–5 бит, зашифрованные данные — около 8. Выше пунктирной
-      линии порога ({{ threshold }} бит) — признак шифрования; красные точки — алерты.
+    <div class="legend mono">
+      <span class="lg"><i class="sw" style="background:#00d4ff" />энтропия файла</span>
+      <span class="lg"><i class="sw sw-dot" style="background:#ff3b5c" />алерт (H ≥ {{ threshold }})</span>
+      <span class="lg"><i class="sw sw-dash" />порог {{ threshold }} бит</span>
     </div>
     <canvas ref="canvas" />
   </div>
@@ -60,8 +73,8 @@ onUnmounted(() => chart?.destroy())
 watch(() => props.points, updateChart, { deep: true })
 </script>
 <style scoped>
+/* .legend / .info-tip — глобальные стили в assets/css/main.css */
 .chart-wrap { background: var(--bg2); border: 1px solid var(--border); padding: 16px 20px 12px; height: 250px; display: flex; flex-direction: column; }
-.chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; }
-.chart-note { font-size: 10.5px; line-height: 1.45; margin-bottom: 8px; max-width: 720px; }
+.chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; }
 canvas { flex: 1; min-height: 0; }
 </style>

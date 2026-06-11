@@ -26,30 +26,45 @@
         :value="summary.total_alerts ?? '—'"
         :sub="summary.last_alert_time ? 'последний: ' + fmtRelative(summary.last_alert_time) : 'алертов нет'"
         :variant="(summary.total_alerts ?? 0) > 0 ? 'danger' : 'ok'"
+        tip="Сколько раз за последние 24 часа энтропия изменённого файла
+             превысила порог 7.2 бит — каждое такое событие является
+             признаком возможного шифрования."
       />
       <StatCard
         label="Энтропия (ср. за 1ч)"
         :value="summary.avg_entropy_1h != null ? summary.avg_entropy_1h.toFixed(4) : '—'"
         :sub="'порог: ' + THRESHOLD + ' бит'"
         :variant="(summary.avg_entropy_1h ?? 0) >= THRESHOLD ? 'danger' : 'ok'"
+        tip="Средняя энтропия Шеннона всех изменённых файлов за час.
+             Обычные документы — 3–5 бит, зашифрованные — около 8.
+             Рост среднего к порогу — массовое шифрование."
       />
       <StatCard
         label="RPO (факт)"
         :value="summary.rpo_minutes != null ? summary.rpo_minutes + ' мин' : '—'"
         sub="точка восстановления"
         :variant="rpoVariant"
+        tip="<b>Recovery Point Objective</b> — максимальный объём данных,
+             который будет потерян при атаке: время, прошедшее между двумя
+             последними резервными копиями. Чем меньше — тем лучше."
       />
       <StatCard
         label="RTO (оценка)"
         :value="summary.rto_minutes != null ? summary.rto_minutes + ' мин' : '—'"
         sub="время восстановления"
         variant="accent"
+        tip="<b>Recovery Time Objective</b> — расчётное время полного
+             восстановления данных из архива: размер архива ÷ скорость
+             чтения диска + накладные расходы BorgBackup."
       />
       <StatCard
         label="Последний бэкап"
         :value="summary.last_backup ? fmtRelative(summary.last_backup) : '—'"
         sub="BorgBackup WORM"
         :variant="lastBackupVariant"
+        tip="Время последнего успешного архива. <b>WORM</b> (write once,
+             read many) — режим дозаписи: архивы невозможно изменить или
+             удалить даже при полной компрометации системы."
       />
       <StatCard
         label="События файлов"
