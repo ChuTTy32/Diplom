@@ -13,6 +13,7 @@ import math
 import time
 import logging
 import socket
+import subprocess
 import collections
 import threading
 import httpx
@@ -35,6 +36,7 @@ BACKEND_URL       = os.getenv("BACKEND_URL", "http://backend:8000")
 WATCH_PATH        = os.getenv("WATCH_PATH", "/monitored")
 ENTROPY_THRESHOLD = float(os.getenv("ENTROPY_THRESHOLD", "7.2"))
 SCAN_INTERVAL     = int(os.getenv("SCAN_INTERVAL", "5"))
+SIGNAL_DIR        = os.getenv("SIGNAL_DIR", "/signals")
 HOSTNAME          = socket.gethostname()
 
 ATTACK_WINDOW_SEC = 30
@@ -185,6 +187,16 @@ def report_incident(trigger_file: str, entropy: float, alert_count: int) -> str:
 
 # ─── Lockdown ─────────────────────────────────────────────────────────
 
+def _chmod_recursive(path: str, mode: str) -> bool:
+    """chmod без shell — аргументы передаются списком, инъекция невозможна."""
+    try:
+        subprocess.run(["chmod", "-R", mode, path], check=False, capture_output=True)
+        return True
+    except OSError as e:
+        log.error(f"chmod {mode} {path} failed: {e}")
+        return False
+
+
 def release_lockdown():
     """Снимаем lockdown — восстанавливаем права директории."""
     global lockdown_active, lockdown_timer
@@ -193,11 +205,22 @@ def release_lockdown():
     with alert_lock:
         alert_timestamps.clear()
 
-    try:
-        os.system(f"chmod -R 755 {WATCH_PATH}")
+    if _chmod_recursive(WATCH_PATH, "755"):
         log.info(f"🔓 Lockdown released — {WATCH_PATH} restored to 755")
-    except Exception as e:
-        log.error(f"release_lockdown failed: {e}")
+
+
+def trigger_emergency_backup():
+    """
+    Сигнал borg-сервису через разделяемый volume (/signals).
+    Borg опрашивает сигнальный файл и запускает внеплановый бэкап.
+    """
+    try:
+        os.makedirs(SIGNAL_DIR, exist_ok=True)
+        with open(os.path.join(SIGNAL_DIR, "emergency_backup"), "w") as f:
+            f.write(str(time.time()))
+        log.warning("🆘 Emergency backup signal sent to borg")
+    except OSError as e:
+        log.error(f"emergency signal failed: {e}")
 
 
 def register_alert(file_path: str, entropy: float):
@@ -211,34 +234,30 @@ def register_alert(file_path: str, entropy: float):
             alert_timestamps.pop(0)
         count = len(alert_timestamps)
 
-    if count >= ATTACK_THRESHOLD and not lockdown_active:
-        threading.Thread(
-            target=execute_response,
-            args=(file_path, entropy, count),
-            daemon=True,
-        ).start()
+        # Флаг ставим под локом ДО старта потока — иначе два быстрых алерта
+        # успевают пройти проверку и запустить два execute_response.
+        if count < ATTACK_THRESHOLD or lockdown_active:
+            return
+        lockdown_active = True
+
+    threading.Thread(
+        target=execute_response,
+        args=(file_path, entropy, count),
+        daemon=True,
+    ).start()
 
 
 def execute_response(trigger_file: str, entropy: float, alert_count: int):
-    global lockdown_active, lockdown_timer
-    lockdown_active = True
+    global lockdown_timer
 
     action = report_incident(trigger_file, entropy, alert_count)
 
     if action == "lockdown":
-        try:
-            os.system(f"chmod -R 444 {WATCH_PATH}")
+        if _chmod_recursive(WATCH_PATH, "444"):
             log.critical(f"🔒 LOCKDOWN: {WATCH_PATH} → read-only (444)")
-        except Exception as e:
-            log.error(f"lockdown chmod failed: {e}")
 
     if action in ("lockdown", "emergency_backup"):
-        try:
-            with open("/tmp/emergency_backup", "w") as f:
-                f.write(f"{time.time()}")
-            log.warning("🆘 Emergency backup triggered")
-        except Exception as e:
-            log.error(f"emergency trigger failed: {e}")
+        trigger_emergency_backup()
 
     # Автосброс через LOCKDOWN_DURATION секунд
     lockdown_timer = threading.Timer(LOCKDOWN_DURATION, release_lockdown)
@@ -301,32 +320,29 @@ def on_ebpf_suspect(pid: int, comm: str, writes: int,
     """
     Callback от eBPF: процесс проявляет поведение ransomware
     (аномально высокая частота записи в файлы).
-    Отправляем инцидент на бэкенд и регистрируем алерт.
+
+    eBPF уже агрегировал ≥50 записей в окне — это сформировавшаяся атака,
+    порог ATTACK_THRESHOLD не нужен. Запускаем реакцию напрямую.
+    entropy=0.0 — поведенческая детекция, содержимое не анализировалось;
+    действие на бэкенде определяет alert_count (= количество записей).
     """
-    severity = "critical" if bytes_per_sec >= 10 * 1024 * 1024 else "warning"
-    trigger  = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
-    # Используем порог + 0.1 чтобы пройти условие critical в incidents.py
-    fake_entropy = ENTROPY_THRESHOLD + 0.5 if severity == "warning" else 7.95
-    try:
-        httpx.post(
-            f"{BACKEND_URL}/incidents/report",
-            json={
-                "severity":    severity,
-                "trigger_file": trigger,
-                "entropy":     fake_entropy,
-                "alert_count": writes,
-                "host":        HOSTNAME,
-            },
-            timeout=5.0,
-        )
-        log.warning(
-            f"[eBPF→backend] {severity.upper()} proc={comm} pid={pid} "
-            f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
-        )
-    except Exception as exc:
-        log.error(f"ebpf incident report failed: {exc}")
-    # Также регистрируем как entropy-алерт чтобы попало в дашборд
-    register_alert(trigger, fake_entropy)
+    global lockdown_active
+    trigger = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
+    log.warning(
+        f"[eBPF] SUSPECT proc={comm} pid={pid} "
+        f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
+    )
+
+    with alert_lock:
+        if lockdown_active:
+            return
+        lockdown_active = True
+
+    threading.Thread(
+        target=execute_response,
+        args=(trigger, 0.0, writes),
+        daemon=True,
+    ).start()
 
 
 def main():

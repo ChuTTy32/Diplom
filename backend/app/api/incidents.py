@@ -11,6 +11,7 @@ from app.core.audit import (
     get_incidents, get_audit_log,
 )
 from app.core.limiter import limiter
+from app.core.policy import determine_action
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -31,18 +32,13 @@ class IncidentResponse(BaseModel):
     message: str
 
 
+# Эндпоинты ниже объявлены как sync (def): SQLite-вызовы блокирующие,
+# FastAPI выполняет их в threadpool, не задерживая event loop.
+
 @router.post("/report", response_model=IncidentResponse)
 @limiter.limit("60/minute")
-async def report_incident(request: Request, payload: IncidentIn):
-    if payload.alert_count >= 10 or payload.entropy >= 7.9:
-        action = "lockdown"
-        message = "CRITICAL: lockdown initiated, emergency backup triggered"
-    elif payload.alert_count >= 3:
-        action = "emergency_backup"
-        message = "WARNING: emergency backup triggered"
-    else:
-        action = "logged"
-        message = "INFO: incident logged"
+def report_incident(request: Request, payload: IncidentIn):
+    action, message = determine_action(payload.alert_count, payload.entropy)
 
     incident_id = log_incident(
         severity=payload.severity,
@@ -67,7 +63,7 @@ async def report_incident(request: Request, payload: IncidentIn):
 
 
 @router.post("/reset-lockdown")
-async def reset_lockdown():
+def reset_lockdown():
     """
     Сбрасывает lockdown — восстанавливает права директории.
     Вызывается скриптом симуляции перед каждым тестом.
@@ -89,10 +85,10 @@ async def reset_lockdown():
 
 
 @router.get("/list")
-async def list_incidents(limit: int = 50):
+def list_incidents(limit: int = 50):
     return get_incidents(limit)
 
 
 @router.get("/audit")
-async def audit_log(limit: int = 100):
+def audit_log(limit: int = 100):
     return get_audit_log(limit)

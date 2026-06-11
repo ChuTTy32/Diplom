@@ -15,6 +15,11 @@ BACKUP_SOURCE   = os.getenv("BACKUP_SOURCE", "/monitored")
 BACKEND_URL     = os.getenv("BACKEND_URL", "http://backend:8000")
 INTERVAL_SEC    = int(os.getenv("BACKUP_INTERVAL_SEC", "300"))
 
+# Сигнальный файл от агента (разделяемый volume /signals).
+# Агент создаёт его при инциденте → внеплановый бэкап вне расписания.
+SIGNAL_FILE     = os.path.join(os.getenv("SIGNAL_DIR", "/signals"), "emergency_backup")
+SIGNAL_POLL_SEC = 2
+
 # Скорость чтения с диска при восстановлении (MB/s).
 # 100 MB/s — консервативная оценка для SATA SSD.
 # Переопределяется через env RESTORE_SPEED_MB_PER_SEC.
@@ -121,12 +126,30 @@ def do_backup():
         report("fail", archive_name=archive, error_msg=result.stderr[:500])
 
 
+def check_emergency_signal() -> bool:
+    """Снимает сигнальный файл агента. True — нужен внеплановый бэкап."""
+    if not os.path.exists(SIGNAL_FILE):
+        return False
+    try:
+        os.remove(SIGNAL_FILE)
+    except OSError:
+        pass
+    return True
+
+
 def main():
     log.info(f"BorgBackup service. repo={BORG_REPO} source={BACKUP_SOURCE}")
     init_repo()
     while True:
         do_backup()
-        time.sleep(INTERVAL_SEC)
+        # Между плановыми бэкапами опрашиваем сигнал от агента —
+        # инцидент должен запускать бэкап немедленно, а не через INTERVAL_SEC.
+        deadline = time.time() + INTERVAL_SEC
+        while time.time() < deadline:
+            if check_emergency_signal():
+                log.warning("🆘 Emergency backup signal received from agent")
+                do_backup()
+            time.sleep(SIGNAL_POLL_SEC)
 
 
 if __name__ == "__main__":

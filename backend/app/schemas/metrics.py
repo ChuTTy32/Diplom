@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 
 class EntropyMetricIn(BaseModel):
@@ -24,7 +24,7 @@ class EntropyMetricOut(BaseModel):
 
 
 class BackupEventIn(BaseModel):
-    event_type: str
+    event_type: Literal["start", "success", "fail"]
     archive_name: Optional[str] = None
     duration_sec: Optional[int] = None
     size_bytes: Optional[int] = None

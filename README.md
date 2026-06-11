@@ -12,10 +12,11 @@
 
 ### Ключевые возможности
 
-- **Детекция в реальном времени** — агент вычисляет энтропию Шеннона H = −Σ p·log₂(p) для каждого изменённого файла. Нормальные файлы: H = 3–5 бит. Зашифрованные: H > 7.9 бит
-- **Автоматическая реакция** — при обнаружении атаки система переводит директорию в режим read-only (lockdown) и инициирует экстренное резервное копирование
+- **Двухуровневая детекция** — eBPF kprobe на `vfs_write` перехватывает запись в файлы на уровне ядра (поведенческий анализ частоты записи), агент вычисляет энтропию Шеннона H = −Σ p·log₂(p) для каждого изменённого файла. Нормальные файлы: H = 3–5 бит. Зашифрованные: H > 7.9 бит
+- **Защита от ложных срабатываний** — whitelist легитимных процессов (компиляторы, git, borg) + детекция ransomware-расширений (.locked, .enc, .wncry), пробивающая whitelist
+- **Автоматическая реакция** — при обнаружении атаки система переводит директорию в режим read-only (lockdown) и сигнализирует borg-сервису о внеплановом бэкапе через разделяемый volume
 - **WORM-хранилище** — BorgBackup в режиме append-only: архивы невозможно изменить или удалить даже при компрометации системы
-- **Zero Trust VPN** — весь трафик между сервисами зашифрован через WireGuard (ChaCha20-Poly1305)
+- **Сетевая изоляция** — сервисы разнесены по изолированным Docker-сетям (Zero Trust); для multi-host развёртывания подготовлены конфигурации WireGuard VPN
 - **Аудит-лог** — каждый инцидент фиксируется в изолированной SQLite БД для криминалистического анализа
 - **Дашборд реального времени** — мониторинг энтропии, RPO/RTO метрик, истории инцидентов и бэкапов
 
@@ -25,13 +26,15 @@
 
 | Компонент | Технология |
 |-----------|------------|
-| Агент мониторинга | Python 3.11 + watchdog |
-| API шлюз | FastAPI + Uvicorn |
-| База метрик | PostgreSQL + TimescaleDB |
-| Аудит | SQLite |
+| Перехват на уровне ядра | eBPF (BCC) — kprobe `vfs_write` |
+| Агент мониторинга | Python 3.11 + watchdog (inotify fallback) |
+| API шлюз | FastAPI + Uvicorn + slowapi (rate limiting) |
+| База метрик | PostgreSQL + TimescaleDB (hypertables) |
+| Аудит | SQLite (append-only) |
 | Резервное копирование | BorgBackup (WORM/append-only) |
-| VPN туннель | WireGuard |
+| Сетевая изоляция | Docker bridge-сети; WireGuard для multi-host (production) |
 | Дашборд | Nuxt 4 + Vue 3.5 + Chart.js |
+| Тесты | pytest (84 теста) |
 | Оркестрация | Docker + Docker Compose |
 
 ---
@@ -42,13 +45,14 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    Docker Compose                            │
 │                                                             │
-│  ┌──────────┐    ┌──────────┐    ┌──────────────────────┐  │
-│  │  Agent   │    │   Borg   │    │      WireGuard        │  │
-│  │ watchdog │    │  backup  │    │   Zero Trust VPN      │  │
-│  │ entropy  │    │  WORM    │    │   ChaCha20-Poly1305   │  │
-│  └────┬─────┘    └────┬─────┘    └──────────────────────┘  │
-│       │               │                                      │
-│       └───────┬────────┘                                     │
+│  ┌──────────┐  signal   ┌──────────┐                        │
+│  │  Agent   │──────────▶│   Borg   │                        │
+│  │ eBPF     │ /signals  │  backup  │                        │
+│  │ watchdog │           │  WORM    │                        │
+│  │ entropy  │           │append-only│                       │
+│  └────┬─────┘           └────┬─────┘                        │
+│       │                      │                               │
+│       └──────────┬───────────┘                               │
 │               │ HTTP/REST                                    │
 │       ┌───────▼──────────┐                                  │
 │       │    FastAPI        │                                  │
@@ -72,8 +76,11 @@
 ```
 backend_net  172.20.0.0/24  — внутренний трафик сервисов
 frontend_net               — изолированная сеть UI
-vpn_net      wg1           — зашифрованный туннель агента и борга
 ```
+
+Для multi-host развёртывания (агенты на отдельных машинах) подготовлены
+конфигурации WireGuard VPN — см. `wireguard/`. В однохостовой демонстрации
+VPN не используется: трафик не покидает изолированные Docker-сети.
 
 ---
 
@@ -84,7 +91,6 @@ vpn_net      wg1           — зашифрованный туннель аге�
 - Docker 24+
 - Docker Compose v2
 - `make`
-- `wireguard-tools` (для генерации ключей)
 
 ### Установка
 
@@ -92,7 +98,7 @@ vpn_net      wg1           — зашифрованный туннель аге�
 git clone <repo>
 cd ransomware-backup-system
 
-# Установка: генерация WireGuard ключей + подготовка директорий
+# Установка: создание .env с секретами + подготовка директорий
 make install
 
 # Запуск всех сервисов
@@ -113,9 +119,10 @@ make install     # первоначальная установка
 make start       # запустить систему
 make stop        # остановить систему
 make restart     # перезапустить
-make status      # статус контейнеров + WireGuard
+make status      # статус контейнеров и API
 make logs        # логи всех сервисов
 make check       # полная проверка всех компонентов
+make test        # модульные тесты (pytest)
 make demo        # симуляция ransomware-атаки (для демо)
 make demo-fast   # ускоренная симуляция
 make reset       # сбросить lockdown после атаки
@@ -198,6 +205,7 @@ BORG_PASSPHRASE=changeme       # пароль шифрования репози�
 ransomware-backup-system/
 ├── agent/                  # Python агент мониторинга
 │   ├── agent.py            # watchdog + энтропия Шеннона + реакция
+│   ├── ebpf_monitor.py     # eBPF kprobe/vfs_write + whitelist
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── backend/                # FastAPI API шлюз
@@ -208,22 +216,23 @@ ransomware-backup-system/
 │   │   ├── core/
 │   │   │   ├── config.py
 │   │   │   ├── database.py # TimescaleDB
+│   │   │   ├── policy.py   # доменная логика реагирования
+│   │   │   ├── limiter.py  # rate limiting
 │   │   │   └── audit.py    # SQLite аудит
 │   │   └── main.py
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/               # Nuxt 4 дашборд
-│   ├── pages/index.vue     # главная страница
-│   ├── components/         # StatCard, EntropyChart, AlertTable...
-│   └── composables/
+│   └── app/
+│       ├── pages/index.vue # главная страница
+│       ├── components/     # StatCard, EntropyChart, IncidentTable...
+│       └── composables/
 ├── borg/                   # BorgBackup WORM сервис
-│   ├── backup.py
+│   ├── backup.py           # плановые + emergency бэкапы, RPO/RTO
 │   └── Dockerfile
-├── wireguard/              # WireGuard Zero Trust VPN
-│   ├── config/             # конфиги и ключи (не в git)
-│   ├── scripts/gen_keys.sh # генерация ключей
-│   └── Dockerfile
-├── db/migrations/          # SQL схемы TimescaleDB
+├── wireguard/              # WireGuard VPN (production multi-host, в демо не используется)
+├── db/migrations/          # SQL схемы TimescaleDB (hypertables)
+├── tests/                  # pytest: энтропия, whitelist, RTO, инциденты
 ├── docker-compose.yml
 ├── Makefile
 ├── simulate_attack.sh      # симуляция ransomware для демо
@@ -249,6 +258,27 @@ H(X) = -Σ p(x) · log₂(p(x))
 
 При превышении порога 7.2 бит агент регистрирует алерт. При трёх алертах за 30 секунд — инцидент и lockdown.
 
+Параллельно eBPF-монитор отслеживает частоту записи каждого процесса на уровне ядра: ≥50 записей за 10 секунд или ≥5 МБ/с от процесса вне whitelist — поведенческий признак шифровальщика, реакция запускается немедленно.
+
+---
+
+## Тестирование
+
+```bash
+make test        # или: python3 -m pytest tests/ -v
+```
+
+84 модульных теста покрывают математическое ядро системы:
+
+| Файл | Что проверяется |
+|------|-----------------|
+| `tests/test_entropy.py` | Формула Шеннона: граничные случаи, порог 7.2, файловое сканирование |
+| `tests/test_whitelist.py` | Whitelist процессов и детекция ransomware-расширений |
+| `tests/test_rto.py` | Расчёт RTO: формула, fallback, монотонность |
+| `tests/test_incident.py` | Логика эскалации (lockdown/emergency_backup/logged), SQLite аудит |
+
+Тесты выполняются без Docker и БД — внешние зависимости замоканы в `tests/conftest.py`.
+
 ---
 
 ---
@@ -267,10 +297,11 @@ H(X) = -Σ p(x) · log₂(p(x))
 
 ### Key Features
 
-- **Real-time detection** — the agent computes Shannon entropy H = −Σ p·log₂(p) for every modified file. Normal files score H = 3–5 bits; encrypted files score H > 7.9 bits
-- **Automatic response** — upon detecting an attack, the system sets the monitored directory to read-only (lockdown) and triggers an emergency backup
+- **Two-layer detection** — an eBPF kprobe on `vfs_write` intercepts file writes at the kernel level (behavioral write-rate analysis), while the agent computes Shannon entropy H = −Σ p·log₂(p) for every modified file. Normal files score H = 3–5 bits; encrypted files score H > 7.9 bits
+- **False-positive protection** — a whitelist of legitimate processes (compilers, git, borg) combined with ransomware-extension detection (.locked, .enc, .wncry) that overrides the whitelist
+- **Automatic response** — upon detecting an attack, the system sets the monitored directory to read-only (lockdown) and signals the borg service for an immediate emergency backup via a shared volume
 - **WORM storage** — BorgBackup in append-only mode: archives cannot be modified or deleted even if the system is compromised
-- **Zero Trust VPN** — all inter-service traffic is encrypted via WireGuard (ChaCha20-Poly1305)
+- **Network isolation** — services are separated into isolated Docker networks (Zero Trust); WireGuard VPN configurations are provided for multi-host deployments
 - **Audit log** — every incident is recorded in an isolated SQLite database for forensic analysis
 - **Real-time dashboard** — monitoring of entropy, RPO/RTO metrics, incident history, and backup events
 
@@ -280,13 +311,15 @@ H(X) = -Σ p(x) · log₂(p(x))
 
 | Component | Technology |
 |-----------|------------|
-| Monitoring agent | Python 3.11 + watchdog |
-| API gateway | FastAPI + Uvicorn |
-| Metrics database | PostgreSQL + TimescaleDB |
-| Audit database | SQLite |
+| Kernel-level interception | eBPF (BCC) — kprobe `vfs_write` |
+| Monitoring agent | Python 3.11 + watchdog (inotify fallback) |
+| API gateway | FastAPI + Uvicorn + slowapi (rate limiting) |
+| Metrics database | PostgreSQL + TimescaleDB (hypertables) |
+| Audit database | SQLite (append-only) |
 | Backup | BorgBackup (WORM/append-only) |
-| VPN tunnel | WireGuard |
+| Network isolation | Docker bridge networks; WireGuard for multi-host (production) |
 | Dashboard | Nuxt 4 + Vue 3.5 + Chart.js |
+| Tests | pytest (84 tests) |
 | Orchestration | Docker + Docker Compose |
 
 ---
@@ -297,13 +330,14 @@ H(X) = -Σ p(x) · log₂(p(x))
 ┌─────────────────────────────────────────────────────────────┐
 │                    Docker Compose                            │
 │                                                             │
-│  ┌──────────┐    ┌──────────┐    ┌──────────────────────┐  │
-│  │  Agent   │    │   Borg   │    │      WireGuard        │  │
-│  │ watchdog │    │  backup  │    │   Zero Trust VPN      │  │
-│  │ entropy  │    │  WORM    │    │   ChaCha20-Poly1305   │  │
-│  └────┬─────┘    └────┬─────┘    └──────────────────────┘  │
-│       │               │                                      │
-│       └───────┬────────┘                                     │
+│  ┌──────────┐  signal   ┌──────────┐                        │
+│  │  Agent   │──────────▶│   Borg   │                        │
+│  │ eBPF     │ /signals  │  backup  │                        │
+│  │ watchdog │           │  WORM    │                        │
+│  │ entropy  │           │append-only│                       │
+│  └────┬─────┘           └────┬─────┘                        │
+│       │                      │                               │
+│       └──────────┬───────────┘                               │
 │               │ HTTP/REST                                    │
 │       ┌───────▼──────────┐                                  │
 │       │    FastAPI        │                                  │
@@ -331,7 +365,6 @@ H(X) = -Σ p(x) · log₂(p(x))
 - Docker 24+
 - Docker Compose v2
 - `make`
-- `wireguard-tools`
 
 ### Installation
 
@@ -339,7 +372,7 @@ H(X) = -Σ p(x) · log₂(p(x))
 git clone <repo>
 cd ransomware-backup-system
 
-# Generate WireGuard keys and prepare directories
+# Create .env with generated secrets and prepare directories
 make install
 
 # Start all services
@@ -360,9 +393,10 @@ make install     # first-time setup
 make start       # start all services
 make stop        # stop all services
 make restart     # restart all services
-make status      # container status + WireGuard
+make status      # container and API status
 make logs        # logs from all services
 make check       # full system health check
+make test        # unit tests (pytest)
 make demo        # simulate a ransomware attack
 make demo-fast   # fast simulation
 make reset       # release lockdown after an attack
@@ -455,6 +489,18 @@ H(X) = -Σ p(x) · log₂(p(x))
 | **Encrypted** | **7.8 – 8.0 bits** |
 
 When entropy exceeds the 7.2-bit threshold, the agent registers an alert. Three alerts within 30 seconds trigger an incident and lockdown.
+
+In parallel, the eBPF monitor tracks per-process write rates at the kernel level: ≥50 writes in 10 seconds or ≥5 MB/s from a non-whitelisted process is a behavioral signature of an encryptor, triggering an immediate response.
+
+---
+
+## Testing
+
+```bash
+make test        # or: python3 -m pytest tests/ -v
+```
+
+84 unit tests cover the mathematical core of the system: Shannon entropy (boundary cases, the 7.2-bit threshold), the eBPF process whitelist and ransomware-extension detection, RTO estimation, and incident escalation logic. Tests run without Docker or databases — external dependencies are mocked in `tests/conftest.py`.
 
 ---
 

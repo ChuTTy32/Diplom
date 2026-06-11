@@ -149,6 +149,7 @@ const lastBackupVariant = computed(() => {
 usePolling(fetchAll, 5000)
 
 // Часы
+let clockTimer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   const tick = () => {
     clock.value = new Date().toLocaleTimeString([], {
@@ -156,7 +157,10 @@ onMounted(() => {
     })
   }
   tick()
-  setInterval(tick, 1000)
+  clockTimer = setInterval(tick, 1000)
+})
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
 })
 </script>
 

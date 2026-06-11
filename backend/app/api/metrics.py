@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from app.core.database import get_db
@@ -32,7 +32,7 @@ async def get_entropy(
     alert_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    since = datetime.utcnow() - timedelta(minutes=minutes)
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     where = "WHERE time >= :since" + (" AND alert = TRUE" if alert_only else "")
     result = await db.execute(
         text(f"SELECT * FROM entropy_metrics {where} ORDER BY time DESC LIMIT 1000"),
@@ -75,7 +75,7 @@ async def ingest_system(request: Request, payload: SystemMetricIn, db: AsyncSess
 
 @router.get("/system")
 async def get_system(minutes: int = Query(30, ge=1, le=1440), db: AsyncSession = Depends(get_db)):
-    since = datetime.utcnow() - timedelta(minutes=minutes)
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     result = await db.execute(
         text("SELECT * FROM system_metrics WHERE time >= :since ORDER BY time DESC LIMIT 500"),
         {"since": since},
@@ -85,7 +85,7 @@ async def get_system(minutes: int = Query(30, ge=1, le=1440), db: AsyncSession =
 
 @router.get("/summary", response_model=AlertSummary)
 async def get_summary(db: AsyncSession = Depends(get_db)):
-    since_1h = datetime.utcnow() - timedelta(hours=1)
+    since_1h = datetime.now(timezone.utc) - timedelta(hours=1)
     alerts = await db.execute(text(
         "SELECT COUNT(*) as cnt, MAX(time) as last_time FROM entropy_metrics WHERE alert = TRUE"
     ))

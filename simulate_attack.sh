@@ -55,10 +55,11 @@ echo -e "${GRN}▶ PHASE 1 — Normal files (H ≈ 3–5 bits)${NC}"
 echo "This is a normal text document."            > "$WATCH_DIR/documents/report.txt"
 echo "SELECT * FROM users WHERE active = 1;"      > "$WATCH_DIR/documents/query.sql"
 echo '{"version":1,"name":"config","debug":false}' > "$WATCH_DIR/documents/config.json"
-python3 -c "
-import random, string
+WATCH_DIR="$WATCH_DIR" python3 -c "
+import os, random, string
 data = ''.join(random.choices(string.ascii_letters + string.digits + ' \n', k=4096))
-open('/tmp/monitored/documents/source_code.py', 'w').write(data)
+path = os.path.join(os.environ['WATCH_DIR'], 'documents', 'source_code.py')
+open(path, 'w').write(data)
 " 2>/dev/null || true
 ok "4 нормальных файла — дашборд должен показать H < 7.0"
 sleep "$DELAY"

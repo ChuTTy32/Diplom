@@ -69,7 +69,6 @@ start:
 stop:
 	@echo "$(YEL)[STOP] Остановка сервисов...$(NC)"
 	@$(DC) down
-	@sudo ip link delete wg1 2>/dev/null || true
 	@echo "$(GRN)✓ Сервисы остановлены$(NC)"
 
 # ─── Перезапуск ──────────────────────────────────────────────────────
@@ -84,9 +83,6 @@ status:
 	@echo ""
 	@echo "$(CYN)[STATUS] API Health:$(NC)"
 	@curl -s http://localhost:8000/health 2>/dev/null && echo "" || echo "  $(RED)Backend недоступен$(NC)"
-	@echo ""
-	@echo "$(CYN)[STATUS] WireGuard:$(NC)"
-	@$(DOCKER) exec wireguard wg show wg1 2>/dev/null || echo "  WireGuard не запущен"
 	@echo ""
 
 # ─── Логи ────────────────────────────────────────────────────────────
@@ -141,10 +137,8 @@ check:
 	@$(DOCKER) exec borg borg list /repo 2>/dev/null | tail -5 | \
 		awk '{print "  " $$0}' || echo "  Borg недоступен"
 	@echo ""
-	@echo "$(CYN)[6/7] WireGuard:$(NC)"
-	@$(DOCKER) exec wireguard wg show wg1 2>/dev/null | \
-		grep -E "interface|public key|peer|allowed" | \
-		awk '{print "  " $$0}' || echo "  WireGuard недоступен"
+	@echo "$(CYN)[6/7] Модульные тесты:$(NC)"
+	@python3 -m pytest tests/ -q 2>/dev/null | tail -1 | awk '{print "  " $$0}' || echo "  pytest не установлен"
 	@echo ""
 	@echo "$(CYN)[7/7] Frontend:$(NC)"
 	@curl -s -o /dev/null -w "  HTTP %{http_code}\n" http://localhost:3000 || echo "  $(RED)FAIL$(NC)"
@@ -162,7 +156,6 @@ reset:
 clean:
 	@echo "$(RED)[CLEAN] Удаление контейнеров и volumes...$(NC)"
 	@$(DC) down -v
-	@sudo ip link delete wg1 2>/dev/null || true
 	@rm -rf $(WATCH_PATH)
 	@echo "$(GRN)✓ Очищено$(NC)"
 

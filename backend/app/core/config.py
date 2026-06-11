@@ -1,15 +1,15 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     database_url: str = "postgresql+asyncpg://admin:secret@timescaledb:5432/metrics"
     sqlite_path: str = "/app/data/audit.db"
     secret_key: str = "dev-secret"
-    debug: bool = True
+    # debug=True включает echo всех SQL-запросов SQLAlchemy — только для отладки
+    debug: bool = False
     entropy_threshold: float = 7.2
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

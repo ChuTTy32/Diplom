@@ -116,8 +116,8 @@ _PROC_WHITELIST: frozenset[str] = frozenset({
     # Системные
     "systemd", "journald", "dockerd", "containerd", "postgres",
     "sqlite3", "mysqld", "mongod",
-    # Агент мониторинга (сам себя не должен детектить)
-    "python3", "agent",
+    # Агент мониторинга (сам себя не должен детектить; python3 уже выше)
+    "agent",
 })
 
 # Расширения файлов — признак ransomware.
@@ -148,6 +148,8 @@ class EBPFMonitor:
         self._pid_window: dict = collections.defaultdict(collections.deque)
         # pid → last_alert_time (cooldown)
         self._last_alert: dict = {}
+        # Периодическая чистка завершившихся PID, иначе словари растут вечно
+        self._last_purge = time.time()
 
     # ──────────────────────────────────────────────────────────────────
 
@@ -218,10 +220,31 @@ class EBPFMonitor:
             return False
         return comm in _PROC_WHITELIST
 
+    PURGE_INTERVAL_SEC = 60
+
+    def _purge_stale(self, now: float):
+        """Удаляет окна и cooldown-метки PID, неактивных дольше окна анализа."""
+        cutoff = now - WINDOW_SEC
+        stale = [
+            pid for pid, dq in self._pid_window.items()
+            if not dq or dq[-1][0] < cutoff
+        ]
+        for pid in stale:
+            self._pid_window.pop(pid, None)
+
+        alert_cutoff = now - COOLDOWN_SEC * 2
+        self._last_alert = {
+            pid: ts for pid, ts in self._last_alert.items() if ts >= alert_cutoff
+        }
+        self._last_purge = now
+
     def _handle_event(self, cpu, data, size):
         event = self._b["write_events"].event(data)  # type: ignore
         pid   = event.pid
         now   = time.time()
+
+        if now - self._last_purge >= self.PURGE_INTERVAL_SEC:
+            self._purge_stale(now)
 
         fname = event.fname.decode("utf-8", errors="replace").strip("\x00")
         comm  = event.comm.decode("utf-8", errors="replace").strip("\x00")
