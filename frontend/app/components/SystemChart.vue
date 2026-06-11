@@ -1,6 +1,11 @@
 <template>
   <div class="chart-wrap">
     <div class="chart-header mono">СИСТЕМНЫЕ МЕТРИКИ</div>
+    <div class="chart-note dim">
+      Нагрузка на хост в процентах: CPU — процессор, ОЗУ — оперативная память,
+      Диск — заполнение раздела с защищаемыми данными. Всплеск CPU во время
+      атаки — работа шифровальщика и реакция системы.
+    </div>
     <canvas ref="canvas" />
   </div>
 </template>
@@ -43,7 +48,8 @@ onUnmounted(() => chart?.destroy())
 watch(() => props.points, updateChart, { deep: true })
 </script>
 <style scoped>
-.chart-wrap { background: var(--bg2); border: 1px solid var(--border); padding: 16px 20px 12px; height: 220px; display: flex; flex-direction: column; }
-.chart-header { font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; margin-bottom: 8px; }
+.chart-wrap { background: var(--bg2); border: 1px solid var(--border); padding: 16px 20px 12px; height: 250px; display: flex; flex-direction: column; }
+.chart-header { font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; margin-bottom: 4px; }
+.chart-note { font-size: 10.5px; line-height: 1.45; margin-bottom: 8px; max-width: 720px; }
 canvas { flex: 1; min-height: 0; }
 </style>
