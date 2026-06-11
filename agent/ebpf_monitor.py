@@ -20,6 +20,17 @@ log = logging.getLogger("ebpf")
 # ─── BPF-программа ────────────────────────────────────────────────────
 BPF_PROGRAM = r"""
 #include <uapi/linux/ptrace.h>
+
+/*
+ * Ядро 7.x: clang из bcc неверно вычисляет layout struct filename
+ * (новые аннотации в fs.h), и static_assert(sizeof % 64 == 0) валит
+ * компиляцию. Мы struct filename не используем (только file/inode/dentry),
+ * поэтому отключаем compile-time проверки перед включением fs.h.
+ */
+#include <linux/build_bug.h>
+#undef static_assert
+#define static_assert(expr, ...)
+
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/stat.h>
