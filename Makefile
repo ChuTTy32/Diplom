@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: help install start stop restart status logs logs-agent logs-backend \
-        demo demo-fast check reset clean open
+        demo demo-fast check reset clean open test
 
 # ─── Переменные ──────────────────────────────────────────────────────
 # Читаем WATCH_PATH из .env, fallback /tmp/monitored
@@ -41,6 +41,7 @@ help:
 	@echo "  $(GRN)make demo$(NC)         — симуляция ransomware-атаки"
 	@echo "  $(GRN)make demo-fast$(NC)    — быстрая симуляция (--fast)"
 	@echo "  $(GRN)make check$(NC)        — полная проверка системы"
+	@echo "  $(GRN)make test$(NC)         — запустить модульные тесты (pytest)"
 	@echo "  $(GRN)make reset$(NC)        — сбросить lockdown"
 	@echo "  $(GRN)make clean$(NC)        — удалить контейнеры и volumes"
 	@echo "  $(GRN)make open$(NC)         — открыть дашборд в браузере"
@@ -164,6 +165,11 @@ clean:
 	@sudo ip link delete wg1 2>/dev/null || true
 	@rm -rf $(WATCH_PATH)
 	@echo "$(GRN)✓ Очищено$(NC)"
+
+# ─── Тесты ───────────────────────────────────────────────────────────
+test:
+	@echo "$(CYN)[TEST] Модульные тесты (pytest)...$(NC)"
+	@python3 -m pytest tests/ -v
 
 # ─── Открыть дашборд ─────────────────────────────────────────────────
 open:

@@ -18,6 +18,9 @@ node_modules/
 .nuxt/
 .output/
 
+# Тесты
+.pytest_cache/
+
 # БД и логи
 *.db
 *.sqlite
