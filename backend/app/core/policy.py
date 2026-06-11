@@ -12,9 +12,15 @@ LOCKDOWN_ENTROPY     = 7.9  # энтропия уровня шифрования
 BACKUP_ALERT_COUNT   = 3    # алертов в окне → внеплановый бэкап
 
 
-def determine_action(alert_count: int, entropy: float) -> tuple[str, str]:
+def determine_action(
+    alert_count: int, entropy: float, suspicious_ext: bool = False
+) -> tuple[str, str]:
     """
-    Выбор действия по числу алертов и энтропии триггер-файла.
+    Выбор действия по числу алертов, энтропии и признаку ransomware-расширения.
+
+    suspicious_ext=True — eBPF зафиксировал запись в файл с расширением
+    шифровальщика (.locked, .enc, ...). Это качественная улика уровня ядра:
+    даже одиночное событие требует немедленного спасения данных.
 
     Возвращает (action, message):
       lockdown          — массовая атака или явное шифрование
@@ -23,6 +29,6 @@ def determine_action(alert_count: int, entropy: float) -> tuple[str, str]:
     """
     if alert_count >= LOCKDOWN_ALERT_COUNT or entropy >= LOCKDOWN_ENTROPY:
         return "lockdown", "CRITICAL: lockdown initiated, emergency backup triggered"
-    if alert_count >= BACKUP_ALERT_COUNT:
+    if alert_count >= BACKUP_ALERT_COUNT or suspicious_ext:
         return "emergency_backup", "WARNING: emergency backup triggered"
     return "logged", "INFO: incident logged"

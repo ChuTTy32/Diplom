@@ -24,6 +24,8 @@ class IncidentIn(BaseModel):
     entropy: float
     alert_count: int
     host: str = "unknown"
+    # eBPF: запись в файл с ransomware-расширением (.locked, .enc, ...)
+    suspicious_ext: bool = False
 
 
 class IncidentResponse(BaseModel):
@@ -38,7 +40,9 @@ class IncidentResponse(BaseModel):
 @router.post("/report", response_model=IncidentResponse)
 @limiter.limit("60/minute")
 def report_incident(request: Request, payload: IncidentIn):
-    action, message = determine_action(payload.alert_count, payload.entropy)
+    action, message = determine_action(
+        payload.alert_count, payload.entropy, payload.suspicious_ext
+    )
 
     incident_id = log_incident(
         severity=payload.severity,

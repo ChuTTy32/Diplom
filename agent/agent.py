@@ -43,12 +43,14 @@ HOSTNAME          = socket.gethostname()
 
 ATTACK_WINDOW_SEC = 30
 ATTACK_THRESHOLD  = 3
-LOCKDOWN_DURATION = 60  # секунд до автосброса
+LOCKDOWN_DURATION = 60  # секунд до автосброса lockdown
+RESPONSE_COOLDOWN = 10  # минимум секунд между реакциями (эскалация разрешена)
 
 alert_timestamps: list = []
 alert_lock = threading.Lock()
-lockdown_active = False
+lockdown_active = False                          # реальный lockdown (chmod 444)
 lockdown_timer: threading.Timer | None = None
+_last_response_ts = 0.0                          # время последней реакции
 
 
 # ─── Энтропия Шеннона ────────────────────────────────────────────────
@@ -164,7 +166,8 @@ def send_system_metrics():
         log.error(f"send_system_metrics failed: {e}")
 
 
-def report_incident(trigger_file: str, entropy: float, alert_count: int) -> str:
+def report_incident(trigger_file: str, entropy: float, alert_count: int,
+                    suspicious_ext: bool = False) -> str:
     try:
         severity = "critical" if alert_count >= 10 or entropy >= 7.9 else "warning"
         resp = httpx.post(
@@ -175,6 +178,7 @@ def report_incident(trigger_file: str, entropy: float, alert_count: int) -> str:
                 "entropy": entropy,
                 "alert_count": alert_count,
                 "host": HOSTNAME,
+                "suspicious_ext": suspicious_ext,
             },
             timeout=5.0,
         )
@@ -226,7 +230,7 @@ def trigger_emergency_backup():
 
 
 def register_alert(file_path: str, entropy: float):
-    global lockdown_active
+    global _last_response_ts
     now = time.time()
 
     with alert_lock:
@@ -236,11 +240,15 @@ def register_alert(file_path: str, entropy: float):
             alert_timestamps.pop(0)
         count = len(alert_timestamps)
 
-        # Флаг ставим под локом ДО старта потока — иначе два быстрых алерта
-        # успевают пройти проверку и запустить два execute_response.
-        if count < ATTACK_THRESHOLD or lockdown_active:
+        if lockdown_active or count < ATTACK_THRESHOLD:
             return
-        lockdown_active = True
+        # Кулдаун вместо полного запрета: если атака продолжается после
+        # emergency_backup, через RESPONSE_COOLDOWN секунд count вырастет
+        # и реакция эскалирует до lockdown. Метку времени ставим под локом
+        # ДО старта потока — иначе два быстрых алерта запускают две реакции.
+        if now - _last_response_ts < RESPONSE_COOLDOWN:
+            return
+        _last_response_ts = now
 
     threading.Thread(
         target=execute_response,
@@ -249,23 +257,24 @@ def register_alert(file_path: str, entropy: float):
     ).start()
 
 
-def execute_response(trigger_file: str, entropy: float, alert_count: int):
-    global lockdown_timer
+def execute_response(trigger_file: str, entropy: float, alert_count: int,
+                     suspicious_ext: bool = False):
+    global lockdown_active, lockdown_timer
 
-    action = report_incident(trigger_file, entropy, alert_count)
+    action = report_incident(trigger_file, entropy, alert_count, suspicious_ext)
 
     if action == "lockdown":
+        lockdown_active = True
         if _chmod_recursive(WATCH_PATH, "444"):
             log.critical(f"🔒 LOCKDOWN: {WATCH_PATH} → read-only (444)")
+        # Автосброс — только для реального lockdown
+        lockdown_timer = threading.Timer(LOCKDOWN_DURATION, release_lockdown)
+        lockdown_timer.daemon = True
+        lockdown_timer.start()
+        log.info(f"⏱ Lockdown auto-release in {LOCKDOWN_DURATION}s")
 
     if action in ("lockdown", "emergency_backup"):
         trigger_emergency_backup()
-
-    # Автосброс через LOCKDOWN_DURATION секунд
-    lockdown_timer = threading.Timer(LOCKDOWN_DURATION, release_lockdown)
-    lockdown_timer.daemon = True
-    lockdown_timer.start()
-    log.info(f"⏱ Lockdown auto-release in {LOCKDOWN_DURATION}s")
 
 
 # ─── Watchdog ─────────────────────────────────────────────────────────
@@ -335,31 +344,32 @@ def full_scan():
 
 
 def on_ebpf_suspect(pid: int, comm: str, writes: int,
-                    bytes_per_sec: float, sample_file: str):
+                    bytes_per_sec: float, sample_file: str,
+                    suspicious_ext: bool = False):
     """
-    Callback от eBPF: процесс проявляет поведение ransomware
-    (аномально высокая частота записи в файлы).
+    Callback от eBPF: процесс проявляет поведение ransomware —
+    аномальная частота записи или запись в файл с расширением шифровальщика.
 
-    eBPF уже агрегировал ≥50 записей в окне — это сформировавшаяся атака,
-    порог ATTACK_THRESHOLD не нужен. Запускаем реакцию напрямую.
-    entropy=0.0 — поведенческая детекция, содержимое не анализировалось;
-    действие на бэкенде определяет alert_count (= количество записей).
+    entropy=0.0 — поведенческая детекция, содержимое не анализировалось.
+    Действие определяет backend-policy по alert_count (= числу записей)
+    и флагу suspicious_ext (одиночная запись .locked → emergency_backup).
     """
-    global lockdown_active
+    global _last_response_ts
     trigger = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
     log.warning(
         f"[eBPF] SUSPECT proc={comm} pid={pid} "
-        f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
+        f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s ext={suspicious_ext}"
     )
 
+    now = time.time()
     with alert_lock:
-        if lockdown_active:
+        if lockdown_active or now - _last_response_ts < RESPONSE_COOLDOWN:
             return
-        lockdown_active = True
+        _last_response_ts = now
 
     threading.Thread(
         target=execute_response,
-        args=(trigger, 0.0, writes),
+        args=(trigger, 0.0, writes, suspicious_ext),
         daemon=True,
     ).start()
 

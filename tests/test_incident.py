@@ -76,7 +76,7 @@ class TestIncidentActionLogic:
 
     # ─── eBPF-специфичные сценарии ──────────────────────────────────────
     # Агент при eBPF-детекции отправляет entropy=0.0 (поведенческий анализ,
-    # содержимое не читалось) и alert_count = числу записей в окне (≥50).
+    # содержимое не читалось) и alert_count = числу записей в окне.
 
     def test_ebpf_burst_writes_trigger_lockdown(self):
         assert _action(50, 0.0) == "lockdown"
@@ -88,6 +88,21 @@ class TestIncidentActionLogic:
     def test_single_alert_is_not_lockdown(self):
         # Одиночный алерт не должен блокировать систему
         assert _action(1, 7.0) == "logged"
+
+    def test_suspicious_ext_single_write_triggers_emergency_backup(self):
+        # Одна запись .locked с уровня ядра — качественная улика:
+        # немедленный внеплановый бэкап, не просто логирование
+        action, _ = determine_action(1, 0.0, suspicious_ext=True)
+        assert action == "emergency_backup"
+
+    def test_suspicious_ext_with_mass_writes_escalates_to_lockdown(self):
+        # Количественный порог сильнее качественного признака
+        action, _ = determine_action(50, 0.0, suspicious_ext=True)
+        assert action == "lockdown"
+
+    def test_no_suspicious_ext_single_event_stays_logged(self):
+        action, _ = determine_action(1, 0.0, suspicious_ext=False)
+        assert action == "logged"
 
 
 class TestAuditLog:

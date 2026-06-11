@@ -302,6 +302,7 @@ class EBPFMonitor:
                     writes=write_count,
                     bytes_per_sec=bps,
                     sample_file=fname,
+                    suspicious_ext=self._is_suspicious_ext(fname),
                 )
 
     def _poll_loop(self):

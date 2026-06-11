@@ -106,15 +106,15 @@ TOTAL=$(curl -sf "$BACKEND/incidents/list?limit=500" \
     | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
 NEW=$((TOTAL - BEFORE))
 
-LATEST=$(curl -sf "$BACKEND/incidents/list?limit=1" | python3 -c "
+LATEST=$(curl -sf "$BACKEND/incidents/list?limit=3" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 if d:
-    r = d[0]
-    print(f\"{r['action_taken'].upper():20s} entropy={r['entropy']:.4f}  {r['time'][11:19]}\")
+    for r in d:
+        print(f\"    {r['action_taken'].upper():18s} entropy={r['entropy']:.4f}  {r['time'][11:19]}\")
 else:
-    print('no incidents yet')
-" 2>/dev/null || echo "parse error")
+    print('    no incidents yet')
+" 2>/dev/null || echo "    parse error")
 
 ALERT_COUNT=$(curl -sf "$BACKEND/metrics/entropy?minutes=5&alert_only=true" \
     | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
@@ -125,7 +125,8 @@ echo -e "${CYN}  РЕЗУЛЬТАТЫ СИМУЛЯЦИИ${NC}"
 echo -e "${CYN}══════════════════════════════════════════════════${NC}"
 echo -e "  Entropy alerts (last 5m) : ${RED}$ALERT_COUNT${NC}"
 echo -e "  New incidents this run   : ${RED}+$NEW${NC} (total: $TOTAL)"
-echo -e "  Latest action            : ${RED}$LATEST${NC}"
+echo -e "  Actions (latest 3):"
+echo -e "${RED}$LATEST${NC}"
 echo ""
 echo -e "  Dashboard  → ${CYN}http://localhost:3000${NC}"
 echo -e "  Incidents  → ${CYN}curl $BACKEND/incidents/list | python3 -m json.tool${NC}"
