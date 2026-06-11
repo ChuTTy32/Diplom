@@ -30,6 +30,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+# httpx логирует каждый запрос на INFO — оставляем только предупреждения
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("agent")
 
 BACKEND_URL       = os.getenv("BACKEND_URL", "http://backend:8000")
