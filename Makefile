@@ -3,113 +3,113 @@
 # Использование: make <команда>
 # =============================================================================
 
-.PHONY: help install start stop restart status logs demo clean reset check
+.PHONY: help install start stop restart status logs logs-agent logs-backend \
+        demo demo-fast check reset clean open
+
+# ─── Переменные ──────────────────────────────────────────────────────
+# Читаем WATCH_PATH из .env, fallback /tmp/monitored
+WATCH_PATH := $(shell grep '^WATCH_PATH=' .env 2>/dev/null | cut -d= -f2 | tr -d '"')
+WATCH_PATH := $(or $(WATCH_PATH),/tmp/monitored)
+
+# Docker: без sudo если пользователь в группе docker
+DOCKER := $(shell docker info >/dev/null 2>&1 && echo "docker" || echo "sudo docker")
+DC     := $(DOCKER) compose
 
 # Цвета
-RED    := \033[0;31m
-GRN    := \033[0;32m
-YEL    := \033[1;33m
-CYN    := \033[0;36m
-NC     := \033[0m
+RED := \033[0;31m
+GRN := \033[0;32m
+YEL := \033[1;33m
+CYN := \033[0;36m
+DIM := \033[2m
+NC  := \033[0m
 
+# ─── Справка ─────────────────────────────────────────────────────────
 help:
 	@echo ""
 	@echo "$(CYN)╔══════════════════════════════════════════════╗$(NC)"
 	@echo "$(CYN)║         RansomGuard — Backup Monitor         ║$(NC)"
 	@echo "$(CYN)╚══════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "  $(GRN)make install$(NC)   — первоначальная установка (ключи WireGuard + папки)"
-	@echo "  $(GRN)make start$(NC)     — запустить все сервисы"
-	@echo "  $(GRN)make stop$(NC)      — остановить все сервисы"
-	@echo "  $(GRN)make restart$(NC)   — перезапустить все сервисы"
-	@echo "  $(GRN)make status$(NC)    — статус всех контейнеров"
-	@echo "  $(GRN)make logs$(NC)      — логи всех сервисов (последние 20 строк)"
-	@echo "  $(GRN)make demo$(NC)      — запустить симуляцию ransomware-атаки"
-	@echo "  $(GRN)make check$(NC)     — полная проверка системы"
-	@echo "  $(GRN)make reset$(NC)     — сбросить lockdown и права директории"
-	@echo "  $(GRN)make clean$(NC)     — удалить все контейнеры и volumes"
+	@echo "  $(GRN)make install$(NC)      — первоначальная установка"
+	@echo "  $(GRN)make start$(NC)        — запустить все сервисы"
+	@echo "  $(GRN)make stop$(NC)         — остановить все сервисы"
+	@echo "  $(GRN)make restart$(NC)      — перезапустить все сервисы"
+	@echo "  $(GRN)make status$(NC)       — статус контейнеров и API"
+	@echo "  $(GRN)make logs$(NC)         — логи всех сервисов"
+	@echo "  $(GRN)make logs-agent$(NC)   — следить за логами агента"
+	@echo "  $(GRN)make logs-backend$(NC) — следить за логами backend"
+	@echo "  $(GRN)make demo$(NC)         — симуляция ransomware-атаки"
+	@echo "  $(GRN)make demo-fast$(NC)    — быстрая симуляция (--fast)"
+	@echo "  $(GRN)make check$(NC)        — полная проверка системы"
+	@echo "  $(GRN)make reset$(NC)        — сбросить lockdown"
+	@echo "  $(GRN)make clean$(NC)        — удалить контейнеры и volumes"
+	@echo "  $(GRN)make open$(NC)         — открыть дашборд в браузере"
+	@echo ""
+	@echo "  $(DIM)WATCH_PATH = $(WATCH_PATH)$(NC)"
 	@echo ""
 
 # ─── Установка ───────────────────────────────────────────────────────
 install:
-	@echo "$(CYN)[INSTALL] Подготовка системы...$(NC)"
-	@sudo apt-get install -y wireguard-tools 2>/dev/null || true
-	@mkdir -p /tmp/monitored
-	@sudo chown -R $$USER:$$USER /tmp/monitored
-	@mkdir -p wireguard/config backend/app/data
-	@if [ ! -f wireguard/config/wg1.conf ]; then \
-		echo "$(YEL)[INSTALL] Генерация WireGuard ключей...$(NC)"; \
-		sudo bash wireguard/scripts/gen_keys.sh; \
-	else \
-		echo "$(GRN)[INSTALL] WireGuard ключи уже существуют$(NC)"; \
-	fi
-	@echo "$(GRN)[INSTALL] Готово! Запустите: make start$(NC)"
+	@bash setup.sh
 
 # ─── Запуск ──────────────────────────────────────────────────────────
 start:
 	@echo "$(CYN)[START] Запуск всех сервисов...$(NC)"
-	@mkdir -p /tmp/monitored
-	@sudo chown -R $$USER:$$USER /tmp/monitored
-	@sudo docker compose up -d --build
+	@mkdir -p $(WATCH_PATH)
+	@$(DC) up -d --build
 	@echo ""
-	@echo "$(GRN)✓ Сервисы запущены:$(NC)"
-	@echo "  Dashboard : http://localhost:3000"
-	@echo "  API       : http://localhost:8000"
-	@echo "  Swagger   : http://localhost:8000/docs"
+	@echo "$(DIM)Ожидание backend (до 60 сек)...$(NC)"
+	@timeout 60 bash -c 'until curl -sf http://localhost:8000/health >/dev/null 2>&1; do sleep 2; printf "."; done; echo ""' || \
+		echo "$(YEL)⚠ Backend не ответил за 60s — проверьте: make logs-backend$(NC)"
 	@echo ""
-	@$(MAKE) status
+	@$(MAKE) --no-print-directory status
 
 # ─── Остановка ───────────────────────────────────────────────────────
 stop:
 	@echo "$(YEL)[STOP] Остановка сервисов...$(NC)"
-	@sudo docker compose down
+	@$(DC) down
 	@sudo ip link delete wg1 2>/dev/null || true
 	@echo "$(GRN)✓ Сервисы остановлены$(NC)"
 
 # ─── Перезапуск ──────────────────────────────────────────────────────
 restart:
-	@$(MAKE) stop
-	@sleep 2
-	@$(MAKE) start
+	@$(MAKE) --no-print-directory stop
+	@$(MAKE) --no-print-directory start
 
 # ─── Статус ──────────────────────────────────────────────────────────
 status:
 	@echo "$(CYN)[STATUS] Контейнеры:$(NC)"
-	@sudo docker compose ps
-	@echo ""
-	@echo "$(CYN)[STATUS] WireGuard:$(NC)"
-	@sudo docker exec wireguard wg show wg1 2>/dev/null || echo "  WireGuard не запущен"
+	@$(DC) ps
 	@echo ""
 	@echo "$(CYN)[STATUS] API Health:$(NC)"
-	@curl -s http://localhost:8000/health 2>/dev/null || echo "  Backend недоступен"
+	@curl -s http://localhost:8000/health 2>/dev/null && echo "" || echo "  $(RED)Backend недоступен$(NC)"
+	@echo ""
+	@echo "$(CYN)[STATUS] WireGuard:$(NC)"
+	@$(DOCKER) exec wireguard wg show wg1 2>/dev/null || echo "  WireGuard не запущен"
 	@echo ""
 
 # ─── Логи ────────────────────────────────────────────────────────────
 logs:
-	@echo "$(CYN)[LOGS] Последние события:$(NC)"
+	@echo "--- AGENT (last 15) ---"
+	@$(DOCKER) logs agent --tail 15 2>/dev/null || true
 	@echo ""
-	@echo "--- AGENT ---"
-	@sudo docker logs agent --tail 10 2>/dev/null
+	@echo "--- BACKEND (last 10) ---"
+	@$(DOCKER) logs backend --tail 10 2>/dev/null || true
 	@echo ""
-	@echo "--- BACKEND ---"
-	@sudo docker logs backend --tail 5 2>/dev/null
-	@echo ""
-	@echo "--- BORG ---"
-	@sudo docker logs borg --tail 5 2>/dev/null
+	@echo "--- BORG (last 5) ---"
+	@$(DOCKER) logs borg --tail 5 2>/dev/null || true
 
 logs-agent:
-	@sudo docker logs agent --follow
+	@$(DOCKER) logs agent --follow
 
 logs-backend:
-	@sudo docker logs backend --follow
+	@$(DOCKER) logs backend --follow
 
 # ─── Демо атаки ──────────────────────────────────────────────────────
 demo:
-	@echo "$(RED)[DEMO] Запуск симуляции ransomware-атаки...$(NC)"
 	@bash simulate_attack.sh
 
 demo-fast:
-	@echo "$(RED)[DEMO] Быстрая симуляция...$(NC)"
 	@bash simulate_attack.sh --fast
 
 # ─── Полная проверка ─────────────────────────────────────────────────
@@ -118,33 +118,35 @@ check:
 	@echo "$(CYN)║         ПОЛНАЯ ПРОВЕРКА СИСТЕМЫ              ║$(NC)"
 	@echo "$(CYN)╚══════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(CYN)[1/6] Контейнеры:$(NC)"
-	@sudo docker compose ps
+	@echo "$(CYN)[1/7] Контейнеры:$(NC)"
+	@$(DC) ps
 	@echo ""
-	@echo "$(CYN)[2/6] API Health:$(NC)"
-	@curl -s http://localhost:8000/health && echo ""
+	@echo "$(CYN)[2/7] API Health:$(NC)"
+	@curl -s http://localhost:8000/health && echo "" || echo "  $(RED)FAIL$(NC)"
 	@echo ""
-	@echo "$(CYN)[3/6] Метрики (summary):$(NC)"
+	@echo "$(CYN)[3/7] Метрики (summary):$(NC)"
 	@curl -s http://localhost:8000/metrics/summary | \
 		python3 -c "import sys,json; d=json.load(sys.stdin); \
-		print(f'  Alerts: {d[\"total_alerts\"]} | Entropy: {d[\"avg_entropy_1h\"]} | RPO: {d[\"rpo_minutes\"]}m | Last backup: {str(d[\"last_backup\"])[:19]}')"
+		print(f'  alerts={d[\"total_alerts\"]} | avg_entropy={d[\"avg_entropy_1h\"]} | RPO={d[\"rpo_minutes\"]}m | last_backup={str(d[\"last_backup\"])[:19]}')" \
+		2>/dev/null || echo "  Нет данных"
 	@echo ""
-	@echo "$(CYN)[4/6] Инциденты:$(NC)"
+	@echo "$(CYN)[4/7] Инциденты:$(NC)"
 	@curl -s "http://localhost:8000/incidents/list?limit=200" | \
 		python3 -c "import sys,json; d=json.load(sys.stdin); \
-		print(f'  Total: {len(d)} | Latest: {d[0][\"action_taken\"]} at {str(d[0][\"time\"])[11:19]}') if d else print('  No incidents')"
+		[print(f'  [{r[\"severity\"]:8s}] {r[\"action_taken\"]:20s} entropy={r[\"entropy\"]:.4f}  {str(r[\"time\"])[11:19]}') for r in d[:5]] \
+		if d else print('  No incidents')" 2>/dev/null || echo "  Нет данных"
 	@echo ""
-	@echo "$(CYN)[5/6] BorgBackup архивы:$(NC)"
-	@sudo docker exec borg borg list /repo 2>/dev/null | tail -3 | \
+	@echo "$(CYN)[5/7] BorgBackup архивы:$(NC)"
+	@$(DOCKER) exec borg borg list /repo 2>/dev/null | tail -5 | \
 		awk '{print "  " $$0}' || echo "  Borg недоступен"
 	@echo ""
-	@echo "$(CYN)[6/6] WireGuard:$(NC)"
-	@sudo docker exec wireguard wg show wg1 2>/dev/null | \
+	@echo "$(CYN)[6/7] WireGuard:$(NC)"
+	@$(DOCKER) exec wireguard wg show wg1 2>/dev/null | \
 		grep -E "interface|public key|peer|allowed" | \
 		awk '{print "  " $$0}' || echo "  WireGuard недоступен"
 	@echo ""
-	@echo "$(CYN)[7/6] Frontend:$(NC)"
-	@curl -s -o /dev/null -w "  HTTP Status: %{http_code}\n" http://localhost:3000
+	@echo "$(CYN)[7/7] Frontend:$(NC)"
+	@curl -s -o /dev/null -w "  HTTP %{http_code}\n" http://localhost:3000 || echo "  $(RED)FAIL$(NC)"
 	@echo ""
 	@echo "$(GRN)✓ Проверка завершена$(NC)"
 
@@ -152,17 +154,15 @@ check:
 reset:
 	@echo "$(YEL)[RESET] Сброс lockdown...$(NC)"
 	@curl -s -X POST http://localhost:8000/incidents/reset-lockdown > /dev/null
-	@sudo chown -R $$USER:$$USER /tmp/monitored 2>/dev/null || true
-	@sudo find /tmp/monitored -type d -exec chmod 755 {} \; 2>/dev/null || true
-	@sudo find /tmp/monitored -type f -exec chmod 644 {} \; 2>/dev/null || true
-	@echo "$(GRN)✓ Lockdown снят, права восстановлены$(NC)"
+	@chmod -R 755 $(WATCH_PATH) 2>/dev/null || true
+	@echo "$(GRN)✓ Lockdown снят. WATCH_PATH=$(WATCH_PATH) → 755$(NC)"
 
 # ─── Очистка ─────────────────────────────────────────────────────────
 clean:
-	@echo "$(RED)[CLEAN] Удаление всех данных...$(NC)"
-	@sudo docker compose down -v
+	@echo "$(RED)[CLEAN] Удаление контейнеров и volumes...$(NC)"
+	@$(DC) down -v
 	@sudo ip link delete wg1 2>/dev/null || true
-	@sudo rm -rf /tmp/monitored
+	@rm -rf $(WATCH_PATH)
 	@echo "$(GRN)✓ Очищено$(NC)"
 
 # ─── Открыть дашборд ─────────────────────────────────────────────────
