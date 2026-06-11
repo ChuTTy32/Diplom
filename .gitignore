@@ -1,8 +1,8 @@
-# WireGuard приватные ключи — НИКОГДА не коммитить
+# WireGuard — приватные ключи и конфиги с секретами
 wireguard/config/*.key
-wireguard/config/wg0-server.conf
-wireguard/config/wg0-agent.conf
-wireguard/config/wg0-borg.conf
+wireguard/config/wg0*.conf
+wireguard/config/wg1.conf
+wireguard/config/keys
 
 # Переменные окружения
 .env
@@ -18,12 +18,18 @@ node_modules/
 .nuxt/
 .output/
 
-# БД
+# БД и логи
 *.db
 *.sqlite
-
-# Docker
 *.log
-wireguard/config/*.key
-wireguard/config/wg1.conf
-wireguard/config/wg0*.conf
+
+# IDE и редакторы
+.obsidian/
+.idea/
+.vscode/
+.~lock.*
+
+# Рабочие заметки (не для репозитория)
+CLAUDE.md
+Замечания.md
+ДОРАБОТКИ.md
