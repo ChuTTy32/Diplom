@@ -85,10 +85,13 @@ async def get_system(minutes: int = Query(30, ge=1, le=1440), db: AsyncSession =
 
 @router.get("/summary", response_model=AlertSummary)
 async def get_summary(db: AsyncSession = Depends(get_db)):
-    since_1h = datetime.now(timezone.utc) - timedelta(hours=1)
+    since_1h  = datetime.now(timezone.utc) - timedelta(hours=1)
+    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    # Окно 24ч — счётчик за всю жизнь БД бессмысленен на дашборде
     alerts = await db.execute(text(
-        "SELECT COUNT(*) as cnt, MAX(time) as last_time FROM entropy_metrics WHERE alert = TRUE"
-    ))
+        "SELECT COUNT(*) as cnt, MAX(time) as last_time FROM entropy_metrics "
+        "WHERE alert = TRUE AND time >= :since"
+    ), {"since": since_24h})
     alert_row = alerts.mappings().one()
     avg_e = await db.execute(
         text("SELECT AVG(entropy) as avg_e FROM entropy_metrics WHERE time >= :since"),

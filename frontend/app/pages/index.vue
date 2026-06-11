@@ -22,7 +22,7 @@
     <!-- ─── STAT CARDS ─────────────────────────────────────────────── -->
     <section class="stats-grid">
       <StatCard
-        label="total_alerts"
+        label="alerts_24h"
         :value="summary.total_alerts ?? '—'"
         :sub="summary.last_alert_time ? 'last: ' + fmtRelative(summary.last_alert_time) : 'no alerts'"
         :variant="(summary.total_alerts ?? 0) > 0 ? 'danger' : 'ok'"

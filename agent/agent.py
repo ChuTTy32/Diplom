@@ -296,6 +296,13 @@ class EntropyHandler(FileSystemEventHandler):
 
 
 def full_scan():
+    """
+    Периодический обход WATCH_PATH — страховка на случай пропуска
+    inotify-событий. Файл обрабатывается только если mtime изменился
+    с прошлого прохода: иначе каждый старый .locked-файл генерировал бы
+    повторный алерт каждые SCAN_INTERVAL секунд, заваливая БД.
+    """
+    seen_mtimes: dict[str, float] = {}
     while True:
         log.info(f"Full scan: {WATCH_PATH}")
         for root, _, files in os.walk(WATCH_PATH):
@@ -303,6 +310,13 @@ def full_scan():
                 path = os.path.join(root, fname)
                 if os.path.splitext(fname)[1].lower() in SKIP_EXTENSIONS:
                     continue
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if seen_mtimes.get(path) == mtime:
+                    continue
+                seen_mtimes[path] = mtime
                 entropy = file_entropy(path)
                 if entropy == 0.0:
                     continue
@@ -311,6 +325,9 @@ def full_scan():
                 except OSError:
                     size = 0
                 send_entropy(path, entropy, size, entropy >= ENTROPY_THRESHOLD)
+        # Подчистка записей об удалённых файлах
+        if len(seen_mtimes) > 10000:
+            seen_mtimes = {p: m for p, m in seen_mtimes.items() if os.path.exists(p)}
         send_system_metrics()
         time.sleep(SCAN_INTERVAL)
 
