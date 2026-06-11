@@ -37,7 +37,8 @@
               {{ shortTrigger(row.trigger_file) }}
             </td>
             <td class="mono" :class="eClass(row.entropy)">
-              {{ row.entropy != null ? row.entropy.toFixed(4) : '—' }}
+              <!-- 0.0 = eBPF (поведенческая детекция, контент не измерялся) -->
+              {{ row.entropy ? row.entropy.toFixed(4) : '—' }}
             </td>
             <td class="mono dim">{{ row.host }}</td>
           </tr>
@@ -92,7 +93,7 @@ const actionLabel = (a: string) =>
   ({ lockdown: 'БЛОКИРОВКА', emergency_backup: 'ЭКСТР. БЭКАП', logged: 'ЗАПИСАНО' }[a] ?? a)
 
 const eClass = (e: number | null) => {
-  if (e == null) return 'dim'
+  if (!e)        return 'dim'   // null или 0.0 (eBPF) — нейтрально
   if (e >= 7.9)  return 'danger'
   if (e >= 7.2)  return 'warn'
   return 'ok'

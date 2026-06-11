@@ -413,6 +413,19 @@ def on_ebpf_suspect(pid: int, comm: str, writes: int,
     и флагу suspicious_ext (одиночная запись .locked → emergency_backup).
     """
     global _last_response_ts
+
+    # FP-guard: kprobe видит записи ВСЕЙ системы — браузеры и БД легитимно
+    # дают сотни записей/с (cookies.sqlite-wal, кэш). Изолированный
+    # write-burst без ransomware-расширения инцидентом не считается:
+    # квалифицирует только комбинация сигналов (burst × расширение),
+    # а контент в /monitored независимо ловит энтропийный слой.
+    if not suspicious_ext:
+        log.info(
+            f"[eBPF] write burst ignored (no ransomware ext): "
+            f"proc={comm} pid={pid} writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
+        )
+        return
+
     trigger = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
     log.warning(
         f"[eBPF] SUSPECT proc={comm} pid={pid} "
