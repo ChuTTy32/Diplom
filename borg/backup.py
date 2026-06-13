@@ -4,10 +4,12 @@ import time
 import math
 import shutil
 import tempfile
+import threading
 import subprocess
 import logging
 import httpx
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("borg")
@@ -18,10 +20,12 @@ BACKUP_SOURCE   = os.getenv("BACKUP_SOURCE", "/monitored")
 BACKEND_URL     = os.getenv("BACKEND_URL", "http://backend:8000")
 INTERVAL_SEC    = int(os.getenv("BACKUP_INTERVAL_SEC", "300"))
 
-# Сигнальный файл от агента (разделяемый volume /signals).
-# Агент создаёт его при инциденте → внеплановый бэкап вне расписания.
-SIGNAL_FILE     = os.path.join(os.getenv("SIGNAL_DIR", "/signals"), "emergency_backup")
-SIGNAL_POLL_SEC = 2
+# Аутентификация машина-машина и control-сервер.
+# Внеплановый бэкап запрашивается агентом по HTTP (событийно), а не опросом
+# файла-сигнала на общем volume — убран костыль с polling.
+RG_TOKEN     = os.getenv("RG_TOKEN", "")
+CONTROL_PORT = int(os.getenv("BORG_CONTROL_PORT", "9102"))
+_emergency   = threading.Event()
 
 # Скорость чтения с диска при восстановлении (MB/s).
 # 100 MB/s — консервативная оценка для SATA SSD.
@@ -38,10 +42,15 @@ env = {**os.environ, "BORG_PASSPHRASE": BORG_PASSPHRASE}
 last_backup_time = None
 
 
+def _auth_headers() -> dict:
+    return {"Authorization": f"Bearer {RG_TOKEN}"} if RG_TOKEN else {}
+
+
 def report(event_type: str, **kwargs):
     try:
         httpx.post(f"{BACKEND_URL}/metrics/backup",
-                   json={"event_type": event_type, **kwargs}, timeout=5.0)
+                   json={"event_type": event_type, **kwargs},
+                   headers=_auth_headers(), timeout=5.0)
     except Exception as e:
         log.error(f"report failed: {e}")
 
@@ -185,30 +194,48 @@ def do_backup():
         report("fail", archive_name=archive, error_msg=result.stderr[:500])
 
 
-def check_emergency_signal() -> bool:
-    """Снимает сигнальный файл агента. True — нужен внеплановый бэкап."""
-    if not os.path.exists(SIGNAL_FILE):
-        return False
-    try:
-        os.remove(SIGNAL_FILE)
-    except OSError:
+class _ControlHandler(BaseHTTPRequestHandler):
+    """HTTP control: POST /backup — запросить внеплановый бэкап (событийно)."""
+
+    def _authed(self) -> bool:
+        if not RG_TOKEN:
+            return True
+        return self.headers.get("Authorization", "") == f"Bearer {RG_TOKEN}"
+
+    def do_POST(self):
+        if not self._authed():
+            self.send_response(401); self.end_headers(); return
+        if self.path == "/backup":
+            _emergency.set()
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"scheduled"}')
+        else:
+            self.send_response(404); self.end_headers()
+
+    def log_message(self, *args):
         pass
-    return True
+
+
+def _start_control_server():
+    srv = ThreadingHTTPServer(("0.0.0.0", CONTROL_PORT), _ControlHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True, name="control").start()
+    log.info(f"Control server listening on :{CONTROL_PORT}")
 
 
 def main():
     log.info(f"BorgBackup service. repo={BORG_REPO} source={BACKUP_SOURCE}")
     init_repo()
+    _start_control_server()
     while True:
         do_backup()
-        # Между плановыми бэкапами опрашиваем сигнал от агента —
-        # инцидент должен запускать бэкап немедленно, а не через INTERVAL_SEC.
-        deadline = time.time() + INTERVAL_SEC
-        while time.time() < deadline:
-            if check_emergency_signal():
-                log.warning("🆘 Emergency backup signal received from agent")
-                do_backup()
-            time.sleep(SIGNAL_POLL_SEC)
+        # Событийное ожидание: просыпаемся по плановому таймауту (INTERVAL_SEC)
+        # ИЛИ немедленно при запросе аварийного бэкапа от агента (HTTP /backup).
+        # Без polling — Event снимается control-сервером.
+        if _emergency.wait(timeout=INTERVAL_SEC):
+            _emergency.clear()
+            log.warning("🆘 Emergency backup requested → backing up now")
 
 
 if __name__ == "__main__":

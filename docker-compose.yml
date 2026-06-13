@@ -24,9 +24,6 @@ networks:
 volumes:
   timescale_data:
   borg_repo:
-  # Сигнальный канал agent → borg: файл emergency_backup запускает
-  # внеплановый бэкап немедленно при инциденте
-  signals:
 
 services:
 
@@ -64,7 +61,6 @@ services:
       SQLITE_PATH: /app/data/audit.db
     volumes:
       - ./backend:/app
-      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     ports:
       - "8000:8000"
     networks:
@@ -98,15 +94,14 @@ services:
     volumes:
       - ./agent:/app
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
-      - signals:/signals
       - /usr/src:/usr/src:ro
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
     env_file: .env
     environment:
       BACKEND_URL: http://backend:8000
+      BORG_URL: http://borg:9102
       WATCH_PATH: /monitored
-      SIGNAL_DIR: /signals
       ENTROPY_THRESHOLD: ${ENTROPY_THRESHOLD:-7.2}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5}
     networks:
@@ -128,11 +123,9 @@ services:
       BORG_PASSPHRASE: ${BORG_PASSPHRASE:-changeme}
       BACKUP_SOURCE: /monitored
       BACKEND_URL: http://backend:8000
-      SIGNAL_DIR: /signals
     volumes:
       - borg_repo:/repo
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
-      - signals:/signals
     networks:
       - backend_net
     depends_on:

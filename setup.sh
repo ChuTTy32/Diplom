@@ -100,6 +100,7 @@ else
     PG_PASS=$(openssl rand -hex 16)
     BORG_PASS=$(openssl rand -hex 24)
     SECRET_KEY=$(openssl rand -hex 32)
+    RG_TOKEN=$(openssl rand -hex 32)
     cat > .env << EOF
 # PostgreSQL / TimescaleDB
 POSTGRES_USER=admin
@@ -117,6 +118,9 @@ SCAN_INTERVAL=5
 # Backend
 SECRET_KEY=${SECRET_KEY}
 DEBUG=false
+
+# Bearer-токен для аутентификации машина-машина (агент/borg → backend)
+RG_TOKEN=${RG_TOKEN}
 
 # BorgBackup restore speed estimate (MB/s)
 RESTORE_SPEED_MB_PER_SEC=100.0

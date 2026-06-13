@@ -20,6 +20,7 @@ import threading
 import httpx
 import psutil
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from ebpf_monitor import EBPFMonitor
@@ -39,8 +40,17 @@ BACKEND_URL       = os.getenv("BACKEND_URL", "http://backend:8000")
 WATCH_PATH        = os.getenv("WATCH_PATH", "/monitored")
 ENTROPY_THRESHOLD = float(os.getenv("ENTROPY_THRESHOLD", "7.2"))
 SCAN_INTERVAL     = int(os.getenv("SCAN_INTERVAL", "5"))
-SIGNAL_DIR        = os.getenv("SIGNAL_DIR", "/signals")
 HOSTNAME          = socket.gethostname()
+
+# Аутентификация машина-машина и control-сервер
+RG_TOKEN     = os.getenv("RG_TOKEN", "")
+BORG_URL     = os.getenv("BORG_URL", "http://borg:9102")
+CONTROL_PORT = int(os.getenv("AGENT_CONTROL_PORT", "9101"))
+
+
+def _auth_headers() -> dict:
+    """Bearer-заголовок для запросов к backend/borg (пусто — если токен не задан)."""
+    return {"Authorization": f"Bearer {RG_TOKEN}"} if RG_TOKEN else {}
 
 ATTACK_WINDOW_SEC = 30
 ATTACK_THRESHOLD  = 3
@@ -108,7 +118,8 @@ def _flush_buffer() -> bool:
     sent = 0
     for item in batch:
         try:
-            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=item, timeout=5.0)
+            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=item,
+                       headers=_auth_headers(), timeout=5.0)
             sent += 1
         except Exception:
             break  # бэкенд всё ещё недоступен — прекращаем, не трогаем буфер
@@ -138,7 +149,8 @@ def send_entropy(file_path: str, entropy: float, file_size: int, alert: bool):
     backend_ok = _flush_buffer()
     if backend_ok:
         try:
-            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=payload, timeout=5.0)
+            httpx.post(f"{BACKEND_URL}/metrics/entropy", json=payload,
+                       headers=_auth_headers(), timeout=5.0)
             if alert:
                 log.warning(f"⚠ ALERT entropy={entropy:.4f} file={file_path}")
                 register_alert(file_path, entropy)
@@ -172,6 +184,7 @@ def send_system_metrics():
                 "net_in_kb":  net.bytes_recv / 1024,
                 "net_out_kb": net.bytes_sent / 1024,
             },
+            headers=_auth_headers(),
             timeout=5.0,
         )
     except Exception as e:
@@ -192,6 +205,7 @@ def report_incident(trigger_file: str, entropy: float, alert_count: int,
                 "host": HOSTNAME,
                 "suspicious_ext": suspicious_ext,
             },
+            headers=_auth_headers(),
             timeout=5.0,
         )
         data = resp.json()
@@ -225,6 +239,39 @@ def release_lockdown():
 
     if _chmod_recursive(WATCH_PATH, "755"):
         log.info(f"🔓 Lockdown released — {WATCH_PATH} restored to 755")
+
+
+# ─── Control-сервер агента ────────────────────────────────────────────
+# Агент владеет файловой системой /monitored, поэтому сброс lockdown — его
+# зона ответственности. Backend форвардит сюда команду (POST /release),
+# вместо того чтобы самому лезть в чужую ФС.
+
+class _ControlHandler(BaseHTTPRequestHandler):
+    def _authed(self) -> bool:
+        if not RG_TOKEN:
+            return True
+        return self.headers.get("Authorization", "") == f"Bearer {RG_TOKEN}"
+
+    def do_POST(self):
+        if not self._authed():
+            self.send_response(401); self.end_headers(); return
+        if self.path == "/release":
+            release_lockdown()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"released"}')
+        else:
+            self.send_response(404); self.end_headers()
+
+    def log_message(self, *args):
+        pass  # не засорять лог агента запросами control-сервера
+
+
+def _start_control_server():
+    srv = ThreadingHTTPServer(("0.0.0.0", CONTROL_PORT), _ControlHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True, name="control").start()
+    log.info(f"Control server listening on :{CONTROL_PORT}")
 
 
 # Критическая инфраструктура — НИКОГДА не завершаем. Whitelist по РЕАЛЬНОМУ
@@ -281,16 +328,15 @@ def _attribute_pid(file_path: str) -> int | None:
 
 def trigger_emergency_backup():
     """
-    Сигнал borg-сервису через разделяемый volume (/signals).
-    Borg опрашивает сигнальный файл и запускает внеплановый бэкап.
+    Запрос внепланового бэкапа у borg через HTTP control-эндпоинт.
+    Заменяет прежний костыль с опросом файла-сигнала на общем volume:
+    событийный вызов вместо polling, с аутентификацией по токену.
     """
     try:
-        os.makedirs(SIGNAL_DIR, exist_ok=True)
-        with open(os.path.join(SIGNAL_DIR, "emergency_backup"), "w") as f:
-            f.write(str(time.time()))
-        log.warning("🆘 Emergency backup signal sent to borg")
-    except OSError as e:
-        log.error(f"emergency signal failed: {e}")
+        httpx.post(f"{BORG_URL}/backup", headers=_auth_headers(), timeout=5.0)
+        log.warning("🆘 Emergency backup requested from borg (HTTP control)")
+    except Exception as e:
+        log.error(f"emergency backup request failed: {e}")
 
 
 def register_alert(file_path: str, entropy: float):
@@ -498,6 +544,9 @@ def on_ebpf_suspect(pid: int, comm: str, writes: int,
 def main():
     log.info(f"Agent starting. watch={WATCH_PATH} threshold={ENTROPY_THRESHOLD}")
     os.makedirs(WATCH_PATH, exist_ok=True)
+
+    # ── Control-сервер (приём команды release от backend) ───────────
+    _start_control_server()
 
     # ── Буфер метрик ────────────────────────────────────────────────
     threading.Thread(target=_flush_loop, daemon=True, name="buf-flush").start()

@@ -6,6 +6,7 @@ from typing import List
 
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.core.auth import require_token
 from app.schemas.metrics import (
     EntropyMetricIn, EntropyMetricOut,
     BackupEventIn, BackupEventOut,
@@ -15,7 +16,7 @@ from app.schemas.metrics import (
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 
-@router.post("/entropy", status_code=201)
+@router.post("/entropy", status_code=201, dependencies=[Depends(require_token)])
 @limiter.limit("300/minute")
 async def ingest_entropy(request: Request, payload: EntropyMetricIn, db: AsyncSession = Depends(get_db)):
     await db.execute(text(
@@ -41,7 +42,7 @@ async def get_entropy(
     return result.mappings().all()
 
 
-@router.post("/backup", status_code=201)
+@router.post("/backup", status_code=201, dependencies=[Depends(require_token)])
 @limiter.limit("60/minute")
 async def ingest_backup_event(request: Request, payload: BackupEventIn, db: AsyncSession = Depends(get_db)):
     await db.execute(text(
@@ -62,7 +63,7 @@ async def get_backup_events(limit: int = Query(50, ge=1, le=200), db: AsyncSessi
     return result.mappings().all()
 
 
-@router.post("/system", status_code=201)
+@router.post("/system", status_code=201, dependencies=[Depends(require_token)])
 @limiter.limit("120/minute")
 async def ingest_system(request: Request, payload: SystemMetricIn, db: AsyncSession = Depends(get_db)):
     await db.execute(text(

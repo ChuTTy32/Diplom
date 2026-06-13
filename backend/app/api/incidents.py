@@ -2,9 +2,8 @@
 Эндпоинты для управления инцидентами.
 """
 
-import os
-import subprocess
-from fastapi import APIRouter, Request
+import httpx
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from app.core.audit import (
     log_incident, log_audit,
@@ -12,10 +11,10 @@ from app.core.audit import (
 )
 from app.core.limiter import limiter
 from app.core.policy import determine_action
+from app.core.auth import require_token
+from app.core.config import settings
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
-
-WATCH_PATH = os.getenv("WATCH_PATH", "/monitored")
 
 
 class IncidentIn(BaseModel):
@@ -37,7 +36,8 @@ class IncidentResponse(BaseModel):
 # Эндпоинты ниже объявлены как sync (def): SQLite-вызовы блокирующие,
 # FastAPI выполняет их в threadpool, не задерживая event loop.
 
-@router.post("/report", response_model=IncidentResponse)
+@router.post("/report", response_model=IncidentResponse,
+             dependencies=[Depends(require_token)])
 @limiter.limit("60/minute")
 def report_incident(request: Request, payload: IncidentIn):
     action, message = determine_action(
@@ -66,25 +66,25 @@ def report_incident(request: Request, payload: IncidentIn):
     )
 
 
-@router.post("/reset-lockdown")
+@router.post("/reset-lockdown", dependencies=[Depends(require_token)])
 def reset_lockdown():
     """
-    Сбрасывает lockdown — восстанавливает права директории.
-    Вызывается скриптом симуляции перед каждым тестом.
+    Сбрасывает lockdown. Файловой системой /monitored владеет АГЕНТ
+    (он на хосте, у него mount и права), поэтому backend не трогает FS сам,
+    а форвардит команду на control-сервер агента. Это убирает архитектурный
+    костыль «backend лезет в чужую файловую систему».
     """
+    headers = {"Authorization": f"Bearer {settings.rg_token}"} if settings.rg_token else {}
     try:
-        # chmod внутри контейнера backend (путь /monitored примонтирован)
-        subprocess.run(
-            ["chmod", "-R", "755", WATCH_PATH],
-            check=False, capture_output=True
-        )
+        r = httpx.post(f"{settings.agent_url}/release", headers=headers, timeout=5.0)
         log_audit(
             event="LOCKDOWN_RESET",
-            detail=f"Manual reset via API. path={WATCH_PATH}",
-            host="api"
+            detail=f"Forwarded to agent {settings.agent_url}, status={r.status_code}",
+            host="api",
         )
-        return {"status": "ok", "message": f"Lockdown reset. {WATCH_PATH} → 755"}
+        return {"status": "ok", "message": "Release command forwarded to agent"}
     except Exception as e:
+        log_audit(event="LOCKDOWN_RESET_FAIL", detail=str(e), host="api")
         return {"status": "error", "message": str(e)}
 
 

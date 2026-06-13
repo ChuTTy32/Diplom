@@ -8,6 +8,8 @@ set -euo pipefail
 
 WATCH_DIR="${WATCH_PATH:-/tmp/monitored}"
 BACKEND="http://localhost:8000"
+# Bearer-токен для админ-действий (reset-lockdown) — из .env, может быть пустым
+RG_TOKEN=$(grep '^RG_TOKEN=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
 DELAY=2
 [ "${1:-}" = "--fast" ] && DELAY=0.5
 
@@ -60,7 +62,7 @@ log "Baseline incidents: $BEFORE"
 # ── Сброс lockdown и подготовка директории ────────────────────────────
 echo ""
 log "Resetting lockdown + preparing directory..."
-curl -sf -X POST "$BACKEND/incidents/reset-lockdown" > /dev/null
+curl -sf -X POST -H "Authorization: Bearer ${RG_TOKEN}" "$BACKEND/incidents/reset-lockdown" > /dev/null
 # Восстанавливаем права если lockdown успел сработать в прошлый раз
 chmod -R 755 "$WATCH_DIR" 2>/dev/null || true
 # Удаляем артефакты прошлых прогонов — старые .locked/.enc заново
