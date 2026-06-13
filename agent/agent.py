@@ -11,6 +11,7 @@ eBPF активен при privileged-контейнере. При недост�
 import os
 import math
 import time
+import signal
 import logging
 import socket
 import subprocess
@@ -43,7 +44,10 @@ HOSTNAME          = socket.gethostname()
 
 ATTACK_WINDOW_SEC = 30
 ATTACK_THRESHOLD  = 3
-LOCKDOWN_DURATION = 60  # секунд до автосброса lockdown
+# Автосброс lockdown через N секунд. 0 — отключить автосброс (production:
+# снятие только вручную оператором после проверки). По умолчанию 60 — для демо,
+# чтобы ложный инцидент не блокировал каталог навсегда.
+LOCKDOWN_DURATION = int(os.getenv("LOCKDOWN_DURATION", "60"))
 RESPONSE_COOLDOWN = 10  # минимум секунд между реакциями (эскалация разрешена)
 
 # Зеркала порогов lockdown из backend-policy (app/core/policy.py) —
@@ -58,6 +62,7 @@ lockdown_timer: threading.Timer | None = None
 _last_response_ts = 0.0                          # время последней реакции
 _last_alert_file    = ""                         # последний алерт — для эскалатора
 _last_alert_entropy = 0.0
+_ebpf = None                                     # ссылка на EBPFMonitor для атрибуции
 
 
 # ─── Энтропия Шеннона ────────────────────────────────────────────────
@@ -222,6 +227,58 @@ def release_lockdown():
         log.info(f"🔓 Lockdown released — {WATCH_PATH} restored to 755")
 
 
+# Критическая инфраструктура — НИКОГДА не завершаем. Whitelist по РЕАЛЬНОМУ
+# пути исполняемого файла (/proc/pid/exe), а не по comm: comm обрезается до
+# 15 символов и легко подделывается, путь бинаря — нет.
+_PROTECTED_EXE = frozenset({
+    "borg", "postgres", "postmaster", "systemd", "init",
+    "dockerd", "containerd", "sshd",
+})
+
+
+def _proc_exe(pid: int) -> str:
+    """Путь исполняемого файла процесса (агент в pid: host видит хостовые PID)."""
+    try:
+        return os.path.realpath(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+
+
+def _kill_process(pid: int | None, reason: str = "") -> bool:
+    """
+    Принудительно завершает процесс-источник шифрования. PID приходит из
+    атрибуции eBPF (пространство хоста), поэтому агент запускается с pid: host.
+    Защита: не трогаем init (PID 1), собственный процесс и критическую
+    инфраструктуру (по пути бинаря), чтобы не повредить саму систему.
+    """
+    if pid is None or pid <= 1 or pid == os.getpid():
+        return False
+    exe = _proc_exe(pid)
+    if os.path.basename(exe) in _PROTECTED_EXE:
+        log.info(f"kill pid={pid} skipped — protected ({exe})")
+        return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+        log.critical(f"🔪 KILLED process pid={pid} exe={exe} {reason}")
+        return True
+    except ProcessLookupError:
+        return False  # процесс уже завершился
+    except (PermissionError, OSError) as e:
+        log.error(f"kill pid={pid} failed: {e}")
+        return False
+
+
+def _attribute_pid(file_path: str) -> int | None:
+    """
+    Кто писал этот файл? Спрашиваем атрибуцию eBPF по basename.
+    Связывает контентную детекцию (энтропия в /monitored) с процессом-источником.
+    """
+    if _ebpf is None:
+        return None
+    attr = _ebpf.attribute(os.path.basename(file_path))
+    return attr[0] if attr else None
+
+
 def trigger_emergency_backup():
     """
     Сигнал borg-сервису через разделяемый volume (/signals).
@@ -259,9 +316,12 @@ def register_alert(file_path: str, entropy: float):
             return
         _last_response_ts = now
 
+    # Атрибуция вне лока: связываем файл (контентная детекция) с процессом
+    pid = _attribute_pid(file_path)
     threading.Thread(
         target=execute_response,
         args=(file_path, entropy, count),
+        kwargs={"pid": pid},
         daemon=True,
     ).start()
 
@@ -295,24 +355,36 @@ def _escalation_loop():
             trigger, entropy = _last_alert_file, _last_alert_entropy
 
         log.warning(f"⏫ Escalation: sustained burst count={count} → responding")
-        execute_response(trigger, entropy, count)
+        execute_response(trigger, entropy, count, pid=_attribute_pid(trigger))
 
 
 def execute_response(trigger_file: str, entropy: float, alert_count: int,
-                     suspicious_ext: bool = False):
+                     suspicious_ext: bool = False, pid: int | None = None):
     global lockdown_active, lockdown_timer
 
     action = report_incident(trigger_file, entropy, alert_count, suspicious_ext)
+
+    # Точечная реакция: завершаем процесс-источник ТОЛЬКО при подтверждённом
+    # шифровании (lockdown — энтропия ≥7.9 или устойчивый burst), не на
+    # одиночный подозрительный файл (emergency_backup). PID даёт атрибуция eBPF;
+    # это снижает риск ложного убийства легитимного процесса.
+    if pid is not None and action == "lockdown":
+        _kill_process(pid, reason=f"file={trigger_file}")
 
     if action == "lockdown":
         lockdown_active = True
         if _chmod_recursive(WATCH_PATH, "444"):
             log.critical(f"🔒 LOCKDOWN: {WATCH_PATH} → read-only (444)")
-        # Автосброс — только для реального lockdown
-        lockdown_timer = threading.Timer(LOCKDOWN_DURATION, release_lockdown)
-        lockdown_timer.daemon = True
-        lockdown_timer.start()
-        log.info(f"⏱ Lockdown auto-release in {LOCKDOWN_DURATION}s")
+        # Автосброс только при LOCKDOWN_DURATION > 0 (демо-режим). В production
+        # (LOCKDOWN_DURATION=0) снятие lockdown — вручную оператором через API
+        # после верификации, чтобы не переоткрыть данные во время атаки.
+        if LOCKDOWN_DURATION > 0:
+            lockdown_timer = threading.Timer(LOCKDOWN_DURATION, release_lockdown)
+            lockdown_timer.daemon = True
+            lockdown_timer.start()
+            log.info(f"⏱ Lockdown auto-release in {LOCKDOWN_DURATION}s")
+        else:
+            log.info("⏱ Lockdown auto-release отключён (только ручной сброс)")
 
     if action in ("lockdown", "emergency_backup"):
         trigger_emergency_backup()
@@ -405,44 +477,22 @@ def on_ebpf_suspect(pid: int, comm: str, writes: int,
                     bytes_per_sec: float, sample_file: str,
                     suspicious_ext: bool = False):
     """
-    Callback от eBPF: процесс проявляет поведение ransomware —
-    аномальная частота записи или запись в файл с расширением шифровальщика.
+    Сигнал eBPF: процесс проявляет признаки ransomware (аномальный burst записи
+    либо запись файла с расширением шифровальщика).
 
-    entropy=0.0 — поведенческая детекция, содержимое не анализировалось.
-    Действие определяет backend-policy по alert_count (= числу записей)
-    и флагу suspicious_ext (одиночная запись .locked → emergency_backup).
+    eBPF — слой АТРИБУЦИИ и поведенческой корреляции, а НЕ самостоятельный
+    триггер инцидента: kprobe видит записи всей системы и не знает полный путь
+    файла, поэтому реакция по расширению вне /monitored давала бы ложные
+    срабатывания (например, borg при восстановлении архива). Авторитетное
+    решение принимает энтропийный слой (скоуплен на /monitored, анализирует
+    контент), используя атрибуцию eBPF (`attribute()`) для точечного завершения
+    процесса-источника. Здесь сигнал только фиксируется в журнал.
     """
-    global _last_response_ts
-
-    # FP-guard: kprobe видит записи ВСЕЙ системы — браузеры и БД легитимно
-    # дают сотни записей/с (cookies.sqlite-wal, кэш). Изолированный
-    # write-burst без ransomware-расширения инцидентом не считается:
-    # квалифицирует только комбинация сигналов (burst × расширение),
-    # а контент в /monitored независимо ловит энтропийный слой.
-    if not suspicious_ext:
-        log.info(
-            f"[eBPF] write burst ignored (no ransomware ext): "
-            f"proc={comm} pid={pid} writes={writes} bps={bytes_per_sec/1024:.0f}KB/s"
-        )
-        return
-
-    trigger = f"[eBPF] proc={comm} pid={pid} file={sample_file}"
-    log.warning(
-        f"[eBPF] SUSPECT proc={comm} pid={pid} "
-        f"writes={writes} bps={bytes_per_sec/1024:.0f}KB/s ext={suspicious_ext}"
+    kind = "ransomware-ext" if suspicious_ext else f"burst writes={writes}"
+    log.info(
+        f"[eBPF] kernel signal: proc={comm} pid={pid} ({kind}) "
+        f"bps={bytes_per_sec/1024:.0f}KB/s file={sample_file}"
     )
-
-    now = time.time()
-    with alert_lock:
-        if lockdown_active or now - _last_response_ts < RESPONSE_COOLDOWN:
-            return
-        _last_response_ts = now
-
-    threading.Thread(
-        target=execute_response,
-        args=(trigger, 0.0, writes, suspicious_ext),
-        daemon=True,
-    ).start()
 
 
 def main():
@@ -456,7 +506,9 @@ def main():
     threading.Thread(target=_escalation_loop, daemon=True, name="escalation").start()
 
     # ── eBPF (уровень ядра) ──────────────────────────────────────────
+    global _ebpf
     ebpf = EBPFMonitor(on_suspect=on_ebpf_suspect)
+    _ebpf = ebpf                      # для атрибуции из энтропийного слоя
     ebpf_active = ebpf.start()
     if not ebpf_active:
         log.warning("Running in watchdog-only mode (no eBPF)")

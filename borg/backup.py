@@ -1,6 +1,9 @@
 import json
 import os
 import time
+import math
+import shutil
+import tempfile
 import subprocess
 import logging
 import httpx
@@ -26,6 +29,11 @@ SIGNAL_POLL_SEC = 2
 RESTORE_SPEED_MB_PER_SEC = float(os.getenv("RESTORE_SPEED_MB_PER_SEC", "100.0"))
 BORG_OVERHEAD_SEC        = 30  # фиксированные накладные расходы: init + mount
 
+# RTO измеряется реальным восстановлением (borg extract во временный каталог),
+# а не оценивается по формуле. RTO_MEASURE=false — вернуться к аналитической оценке
+# (например, на больших объёмах, где extract на каждый бэкап дорог).
+RTO_MEASURE = os.getenv("RTO_MEASURE", "true").lower() in ("1", "true", "yes")
+
 env = {**os.environ, "BORG_PASSPHRASE": BORG_PASSPHRASE}
 last_backup_time = None
 
@@ -47,6 +55,17 @@ def init_repo():
         log.error(f"borg init failed: {result.stderr}")
     else:
         log.info("Borg repo ready (append-only, repokey encryption)")
+
+    # Снятие протухшего lock.exclusive. Репозиторий пишет ровно один
+    # borg-контейнер (single writer), поэтому лок, доживший до старта сервиса,
+    # остался от borg create, убитого рестартом, — он гарантированно ничей.
+    # Без этого все последующие бэкапы падают с "Failed to acquire lock".
+    bl = subprocess.run(
+        ["borg", "break-lock", BORG_REPO],
+        env=env, capture_output=True, text=True,
+    )
+    if bl.returncode == 0:
+        log.info("Stale lock cleared (break-lock on startup)")
 
 
 def get_compressed_size(archive: str) -> int:
@@ -88,6 +107,36 @@ def estimate_rto(compressed_bytes: int, backup_duration_sec: int) -> int:
     return max(1, int(backup_duration_sec / 60) + 1)
 
 
+def measure_rto(archive: str) -> tuple[int, float]:
+    """
+    ИЗМЕРЯЕТ RTO реальным восстановлением: разворачивает архив во временный
+    каталог через `borg extract` и засекает фактическое время чтения,
+    расшифровки и распаковки. Это и есть время восстановления данных.
+
+    Возвращает (rto_minutes, measured_sec). При ошибке extract — (0, 0.0),
+    вызывающий код переключится на аналитическую оценку.
+    """
+    tmp = tempfile.mkdtemp(prefix="rto_", dir="/tmp")
+    try:
+        t0 = time.time()
+        r = subprocess.run(
+            ["borg", "extract", archive],
+            env=env, cwd=tmp, capture_output=True, text=True, timeout=600,
+        )
+        measured = time.time() - t0
+        if r.returncode != 0:
+            log.warning(f"measure_rto: extract failed: {r.stderr[:200]}")
+            return 0, 0.0
+        # Реальный замер + запас на инициализацию восстановления (mount/init).
+        rto_min = max(1, math.ceil((measured + BORG_OVERHEAD_SEC) / 60))
+        return rto_min, round(measured, 3)
+    except Exception as exc:
+        log.warning(f"measure_rto failed: {exc}")
+        return 0, 0.0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def do_backup():
     global last_backup_time
     archive = f"{BORG_REPO}::backup-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
@@ -105,13 +154,23 @@ def do_backup():
 
     if result.returncode == 0:
         compressed_bytes = get_compressed_size(archive)
-        rto = estimate_rto(compressed_bytes, duration)
         size_bytes = compressed_bytes if compressed_bytes > 0 else None
+
+        # RTO: сначала реальный замер восстановлением, при сбое — оценка
+        measured_sec = 0.0
+        rto = 0
+        if RTO_MEASURE:
+            rto, measured_sec = measure_rto(archive)
+        if rto == 0:
+            rto = estimate_rto(compressed_bytes, duration)
+            rto_src = "оценка"
+        else:
+            rto_src = f"измерено {measured_sec}s"
 
         last_backup_time = now
         log.info(
             f"Backup OK duration={duration}s size={compressed_bytes//1024}KB "
-            f"RPO={rpo}m RTO={rto}m"
+            f"RPO={rpo}m RTO={rto}m ({rto_src})"
         )
         report(
             "success",

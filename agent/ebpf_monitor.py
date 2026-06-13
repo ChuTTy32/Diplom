@@ -159,6 +159,12 @@ class EBPFMonitor:
         self._pid_window: dict = collections.defaultdict(collections.deque)
         # pid → last_alert_time (cooldown)
         self._last_alert: dict = {}
+        # Атрибуция: basename файла → (pid, comm, ts). Энтропийный слой
+        # (детекция по контенту в /monitored) спрашивает «кто писал этот файл?»,
+        # чтобы точечно завершить процесс-источник. Это и есть корреляция
+        # двух уровней: контент (энтропия) × поведение/идентичность (eBPF).
+        self._recent_writes: dict = {}
+        self._recent_lock = threading.Lock()
         # Периодическая чистка завершившихся PID, иначе словари растут вечно
         self._last_purge = time.time()
 
@@ -232,6 +238,34 @@ class EBPFMonitor:
         return comm in _PROC_WHITELIST
 
     PURGE_INTERVAL_SEC = 60
+    ATTR_TTL_SEC       = 15   # окно атрибуции: запись «свежая» 15 секунд
+
+    def _record_write(self, fname: str, pid: int, comm: str, now: float):
+        """Запоминает последнего писателя файла для атрибуции по basename."""
+        if not fname:
+            return
+        with self._recent_lock:
+            self._recent_writes[fname] = (pid, comm, now)
+            if len(self._recent_writes) > 4096:
+                cutoff = now - self.ATTR_TTL_SEC
+                for k in [k for k, v in self._recent_writes.items() if v[2] < cutoff]:
+                    del self._recent_writes[k]
+
+    def attribute(self, basename: str) -> Optional[tuple]:
+        """
+        Возвращает (pid, comm) процесса, недавно (≤ ATTR_TTL_SEC) писавшего файл
+        с таким basename, либо None. Используется энтропийным слоем для точечного
+        завершения процесса-источника шифрования.
+        """
+        now = time.time()
+        with self._recent_lock:
+            rec = self._recent_writes.get(basename)
+        if not rec:
+            return None
+        pid, comm, ts = rec
+        if now - ts > self.ATTR_TTL_SEC:
+            return None
+        return (pid, comm)
 
     def _purge_stale(self, now: float):
         """Удаляет окна и cooldown-метки PID, неактивных дольше окна анализа."""
@@ -259,6 +293,10 @@ class EBPFMonitor:
 
         fname = event.fname.decode("utf-8", errors="replace").strip("\x00")
         comm  = event.comm.decode("utf-8", errors="replace").strip("\x00")
+
+        # Атрибуция: запоминаем писателя ДО whitelist-фильтра, чтобы энтропийный
+        # слой мог сопоставить файл из /monitored с процессом-источником.
+        self._record_write(fname, pid, comm, now)
 
         # Легитимный процесс без подозрительного расширения → пропускаем
         if self._is_whitelisted(comm, fname):

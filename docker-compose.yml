@@ -64,7 +64,6 @@ services:
       SQLITE_PATH: /app/data/audit.db
     volumes:
       - ./backend:/app
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
     ports:
       - "8000:8000"
@@ -92,6 +91,10 @@ services:
     container_name: agent
     restart: unless-stopped
     privileged: true
+    # pid: host — eBPF отдаёт PID в пространстве хоста; чтобы агент мог
+    # завершить процесс-шифровальщик (os.kill) и читать /proc/<pid>/exe
+    # для whitelist по пути бинаря, ему нужно общее с хостом PID-пространство.
+    pid: host
     volumes:
       - ./agent:/app
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
