@@ -147,7 +147,7 @@ make demo-fast
 #    - рост счётчика алертов
 #    - скачок энтропии на графике
 #    - появление инцидентов в таблице
-#    - автоматический lockdown
+#    - завершение процесса-источника и lockdown
 
 # 5. Проверить аудит-лог
 curl http://localhost:8000/incidents/audit
@@ -172,18 +172,19 @@ curl http://localhost:8000/incidents/audit
 | `POST` | `/incidents/reset-lockdown` | Сброс lockdown |
 | `GET`  | `/health` | Health check |
 
+Мутирующие эндпоинты (`POST`) требуют bearer-токен (`Authorization: Bearer <RG_TOKEN>`).
 Полная документация: `http://localhost:8000/docs`
 
 ---
 
 ## Конфигурация
 
-Все параметры в файле `.env`:
+Все параметры в файле `.env` (генерируется командой `make install`):
 
 ```env
 # База данных
 POSTGRES_USER=admin
-POSTGRES_PASSWORD=secret
+POSTGRES_PASSWORD=<генерируется>
 POSTGRES_DB=metrics
 
 # Агент
@@ -192,7 +193,11 @@ ENTROPY_THRESHOLD=7.2          # порог энтропии для алерта
 SCAN_INTERVAL=5                # интервал сканирования (секунды)
 
 # BorgBackup
-BORG_PASSPHRASE=changeme       # пароль шифрования репозитория
+BORG_PASSPHRASE=<генерируется>  # пароль шифрования репозитория
+RESTORE_SPEED_MB_PER_SEC=100.0  # оценка скорости восстановления (запасной расчёт RTO)
+
+# Аутентификация
+RG_TOKEN=<генерируется>         # bearer-токен machine-to-machine
 ```
 
 ---
@@ -202,8 +207,8 @@ BORG_PASSPHRASE=changeme       # пароль шифрования репози�
 ```
 ransomware-backup-system/
 ├── agent/                  # Python агент мониторинга
-│   ├── agent.py            # watchdog + энтропия Шеннона + реакция
-│   ├── ebpf_monitor.py     # eBPF kprobe/vfs_write + whitelist
+│   ├── agent.py            # watchdog + энтропия + атрибуция/kill + реакция
+│   ├── ebpf_monitor.py     # eBPF kprobe/vfs_write + атрибуция + whitelist
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── backend/                # FastAPI API шлюз
@@ -216,6 +221,7 @@ ransomware-backup-system/
 │   │   │   ├── database.py # TimescaleDB
 │   │   │   ├── policy.py   # доменная логика реагирования
 │   │   │   ├── limiter.py  # rate limiting
+│   │   │   ├── auth.py     # bearer-токен (machine-to-machine)
 │   │   │   └── audit.py    # SQLite аудит
 │   │   └── main.py
 │   ├── Dockerfile
@@ -283,226 +289,6 @@ make test        # или: python3 -m pytest tests/ -v
 
 ---
 
----
+## Лицензия
 
-# RansomGuard — Ransomware-Resistant Backup System
-
-> Bachelor's Thesis  
-> NSUACE (Sibstrin) · Department of Information Systems and Technologies · 2026  
-> Program 09.03.02 «Information Systems and Technologies»
-
----
-
-## Overview
-
-**RansomGuard** is a microservice-based system for proactive ransomware protection with automated backup. The system detects file encryption in real time using Shannon entropy analysis, automatically isolates the threat, and stores backups in a protected WORM repository.
-
-### Key Features
-
-- **Two-layer correlated detection** — an eBPF kprobe on `vfs_write` intercepts writes at the kernel level and **attributes the source process**, while Shannon entropy H = −Σ p·log₂(p) over file content does the content detection. The entropy layer is authoritative (normal 3–5 bits, encrypted > 7.9) and links an incident to a concrete PID via eBPF attribution
-- **Targeted response** — on confirmed encryption the system **kills the source process** by PID (agent runs in `pid: host`), sets the directory read-only (lockdown), and triggers a backup. Infrastructure is protected by a real `/proc/pid/exe` path whitelist
-- **False-positive protection** — an incident requires a combination of signals (content + attribution); real system noise (browsers, databases) is not escalated
-- **True server-side WORM** — the repository lives on a separate `borg-server` node reachable only via SSH over WireGuard; `borg serve --append-only` enforces immutability server-side. The client has no filesystem access to the repo and can only run `borg serve`
-- **Network isolation (Zero Trust)** — two isolated Docker networks plus a **real WireGuard tunnel** (10.8.0.0/24) carrying all backup traffic; the repository is unreachable outside the VPN
-- **Authentication** — metric ingestion and control actions are protected by a machine-to-machine bearer token
-- **Audit log** — every incident is recorded in an isolated SQLite database for forensic analysis
-- **Real-time dashboard** — monitoring of entropy, RPO/RTO metrics, incident history, and backup events
-
----
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| Kernel-level interception | eBPF (BCC) — kprobe `vfs_write`, process attribution |
-| Monitoring agent | Python 3.11 + watchdog (inotify) + Shannon entropy |
-| API gateway | FastAPI + Uvicorn + slowapi (rate limiting) + bearer auth |
-| Metrics database | PostgreSQL + TimescaleDB (hypertables) |
-| Audit database | SQLite (append-only) |
-| Backup | BorgBackup, server-side `borg serve --append-only` (WORM) |
-| Storage node | separate `borg-server` over SSH through WireGuard |
-| Network isolation | Docker bridge networks + WireGuard tunnel (real backup transport) |
-| Dashboard | Nuxt 4 + Vue 3.5 + Chart.js |
-| Tests | pytest (87 tests) |
-| Orchestration | Docker + Docker Compose (6 services) |
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Docker Compose (6 services)                   │
-│                                                                        │
-│  ┌──────────┐  HTTP /backup  ┌──────────┐   ssh:// over WireGuard      │
-│  │  Agent   │───────────────▶│   Borg   │═══════════════════╗          │
-│  │ eBPF     │  (control)      │ (client) │   wg0 10.8.0.0/24 ║          │
-│  │ watchdog │  attribute+kill └────┬─────┘                   ▼          │
-│  │ entropy  │                      │              ┌────────────────┐   │
-│  └────┬─────┘                      │              │   borg-server  │   │
-│       │ HTTP+token                 │ HTTP+token   │ serve          │   │
-│       ▼                            ▼              │ --append-only  │   │
-│  ┌───────────────────┐                           │ (server WORM)  │   │
-│  │   FastAPI Backend │◀─── reset → agent /release└────────────────┘   │
-│  └───────┬───────────┘                                                 │
-│          │                                                             │
-│   ┌──────▼───────┐   ┌────────────┐    ┌──────────────────────┐        │
-│   │ TimescaleDB  │   │   SQLite   │    │   Nuxt 4 Dashboard   │        │
-│   │  (metrics)   │   │  (audit)   │    │  ← localhost:3000     │        │
-│   └──────────────┘   └────────────┘    └──────────────────────┘        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Quick Start
-
-### Requirements
-
-- Docker 24+
-- Docker Compose v2
-- `make`
-
-### Installation
-
-```bash
-git clone <repo>
-cd ransomware-backup-system
-
-# Create .env with generated secrets and prepare directories
-make install
-
-# Start all services
-make start
-```
-
-After startup:
-- Dashboard: **http://localhost:3000**
-- API (Swagger): **http://localhost:8000/docs**
-
----
-
-## Management Commands
-
-```bash
-make help        # list all commands
-make install     # first-time setup
-make start       # start all services
-make stop        # stop all services
-make restart     # restart all services
-make status      # container and API status
-make logs        # logs from all services
-make check       # full system health check
-make test        # unit tests (pytest)
-make demo        # simulate a ransomware attack
-make demo-fast   # fast simulation
-make reset       # release lockdown after an attack
-make clean       # remove all containers and volumes
-```
-
----
-
-## Demo
-
-To demonstrate the system during a presentation:
-
-```bash
-# 1. Start the system
-make start
-
-# 2. Open dashboard in browser
-# http://localhost:3000
-
-# 3. Run attack simulation
-make demo-fast
-
-# 4. Watch on dashboard:
-#    - alert counter increasing
-#    - entropy spike on the chart
-#    - new incidents appearing in the table
-#    - automatic lockdown triggered
-
-# 5. Check audit log
-curl http://localhost:8000/incidents/audit
-```
-
----
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/metrics/entropy` | Receive entropy metrics from agent |
-| `GET`  | `/metrics/entropy` | Entropy metrics history |
-| `POST` | `/metrics/backup` | Register backup event |
-| `GET`  | `/metrics/backup` | Backup history |
-| `POST` | `/metrics/system` | System metrics (CPU/RAM/Disk) |
-| `GET`  | `/metrics/system` | System metrics history |
-| `GET`  | `/metrics/summary` | Dashboard summary |
-| `POST` | `/incidents/report` | Report an incident |
-| `GET`  | `/incidents/list` | List incidents |
-| `GET`  | `/incidents/audit` | Full audit log |
-| `POST` | `/incidents/reset-lockdown` | Release lockdown |
-| `GET`  | `/health` | Health check |
-
-Full docs: `http://localhost:8000/docs`
-
----
-
-## Configuration
-
-All parameters in `.env`:
-
-```env
-# Database
-POSTGRES_USER=admin
-POSTGRES_PASSWORD=secret
-POSTGRES_DB=metrics
-
-# Agent
-WATCH_PATH=/tmp/monitored      # monitored directory
-ENTROPY_THRESHOLD=7.2          # entropy alert threshold
-SCAN_INTERVAL=5                # scan interval (seconds)
-
-# BorgBackup
-BORG_PASSPHRASE=changeme       # repository encryption passphrase
-```
-
----
-
-## How Detection Works
-
-Ransomware encrypts files — after encryption, byte distribution becomes uniform (each byte occurs with probability 1/256). Shannon entropy measures this uniformity:
-
-```
-H(X) = -Σ p(x) · log₂(p(x))
-```
-
-| File type | Entropy |
-|-----------|---------|
-| Text (.txt, .py) | 3.5 – 5.0 bits |
-| Executable (.exe) | 5.5 – 6.5 bits |
-| Compressed (.zip, .gz) | 7.0 – 7.5 bits |
-| **Encrypted** | **7.8 – 8.0 bits** |
-
-When entropy exceeds the 7.2-bit threshold, the agent registers an alert. The response escalates by alert count within a 30-second window: ≥3 alerts (or a suspicious extension) trigger an emergency backup; ≥10 alerts or entropy ≥7.9 trigger a lockdown.
-
-In parallel, the eBPF probe on `vfs_write` performs **attribution** — recording which process (PID) wrote each file. When the entropy layer confirms encryption, the agent resolves the source PID via eBPF attribution and **kills the process** (`SIGKILL`), not just locking the directory. Correlating content (entropy) with behaviour/identity (eBPF) yields a targeted response instead of acting on a single signal.
-
-In parallel, the eBPF monitor tracks per-process write rates at the kernel level: ≥50 writes in 10 seconds or ≥5 MB/s from a non-whitelisted process is a behavioral signature of an encryptor, triggering an immediate response.
-
----
-
-## Testing
-
-```bash
-make test        # or: python3 -m pytest tests/ -v
-```
-
-87 unit tests cover the mathematical core of the system: Shannon entropy (boundary cases, the 7.2-bit threshold), the eBPF process whitelist and ransomware-extension detection, RTO estimation, and incident escalation logic. Tests run without Docker or databases — external dependencies are mocked in `tests/conftest.py`.
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE)
+Лицензия MIT — см. файл [LICENSE](LICENSE).
