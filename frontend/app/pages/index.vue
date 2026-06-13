@@ -4,16 +4,15 @@
     <!-- ─── HEADER ─────────────────────────────────────────────────── -->
     <header class="header">
       <div class="header-left">
-        <span class="logo mono accent">RG</span>
+        <span class="logo-mark">RG</span>
         <div>
-          <div class="title">RANSOMGUARD</div>
-          <div class="subtitle mono dim">система защиты резервных копий v1.0</div>
+          <div class="title">RansomGuard</div>
+          <div class="subtitle">Система превентивной защиты резервных копий</div>
         </div>
       </div>
       <div class="header-right">
-        <div class="pulse-dot" :class="connected ? 'pulse-ok' : 'pulse-err'" />
-        <span class="mono dim" style="font-size:11px">
-          {{ connected ? 'ПОДКЛЮЧЕНО' : 'НЕТ СВЯЗИ' }}
+        <span class="pill" :class="connected ? 'is-ok' : 'is-danger'">
+          {{ connected ? 'Подключено' : 'Нет связи' }}
         </span>
         <span class="clock mono">{{ clock }}</span>
       </div>
@@ -88,9 +87,9 @@
     </section>
 
     <!-- ─── FOOTER ─────────────────────────────────────────────────── -->
-    <footer class="footer mono dim">
-      НГАСУ (Сибстрин) · ВКР 09.03.02 · Защищённая система резервного копирования
-      <span style="float:right">опрос: 5с · {{ fmtTime(new Date().toISOString()) }}</span>
+    <footer class="footer">
+      <span>НГАСУ (Сибстрин) · ВКР 09.03.02 · Защищённая система резервного копирования</span>
+      <span class="dim">обновление каждые 5 с</span>
     </footer>
 
   </div>
@@ -182,10 +181,12 @@ onUnmounted(() => {
 <style scoped>
 .dashboard {
   min-height: 100vh;
+  max-width: 1440px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 0;
-  background: var(--bg);
+  gap: 18px;
+  padding: 24px clamp(16px, 4vw, 40px) 28px;
 }
 
 /* ─── Header ─── */
@@ -193,84 +194,55 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 28px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg2);
-  position: sticky; top: 0; z-index: 10;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 .header-left { display: flex; align-items: center; gap: 14px; }
-.logo {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  background: linear-gradient(135deg, var(--accent), var(--ok));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+.logo-mark {
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  color: #fff; font-weight: 800; font-size: 16px; letter-spacing: 0.02em;
+  box-shadow: 0 6px 18px -6px rgba(99,102,241,0.7);
 }
-.title {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.15em;
-  color: var(--text);
-}
-.subtitle { font-size: 10px; letter-spacing: 0.08em; margin-top: 1px; }
-.header-right { display: flex; align-items: center; gap: 12px; }
-.clock { font-family: var(--font-mono); font-size: 13px; color: var(--text-mono); }
+.title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+.subtitle { font-size: 12.5px; color: var(--text-dim); margin-top: 1px; }
+.header-right { display: flex; align-items: center; gap: 14px; }
+.clock { font-size: 13px; color: var(--text-2); }
 
-/* Pulse dot */
-.pulse-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  position: relative;
-}
-.pulse-ok  { background: var(--ok); box-shadow: 0 0 0 0 rgba(0,230,118,0.4); animation: pulse-ok 2s infinite; }
-.pulse-err { background: var(--danger); }
-@keyframes pulse-ok {
-  0%   { box-shadow: 0 0 0 0 rgba(0,230,118,0.4); }
-  70%  { box-shadow: 0 0 0 6px rgba(0,230,118,0); }
-  100% { box-shadow: 0 0 0 0 rgba(0,230,118,0); }
-}
-
-/* ─── Sections ─── */
+/* ─── Sections (карточки с воздухом) ─── */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  border-bottom: 1px solid var(--border);
+  gap: 14px;
 }
-.stats-grid > * {
-  border-right: 1px solid var(--border);
-}
-.stats-grid > *:last-child { border-right: none; }
-
 .charts-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--border);
-  border-bottom: 1px solid var(--border);
+  gap: 18px;
 }
-.charts-grid > * { background: var(--bg2); }
-
 .tables-grid {
   display: grid;
-  /* AlertTable + BackupTable рядом, IncidentTable на всю ширину снизу */
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto;
-  gap: 1px;
-  background: var(--border);
-  flex: 1;
+  gap: 18px;
 }
-.tables-grid > * { background: var(--bg2); }
-/* IncidentTable — третий элемент, растягиваем на обе колонки */
+/* IncidentTable — третий элемент, во всю ширину снизу */
 .tables-grid > *:nth-child(3) { grid-column: 1 / -1; }
 
 /* ─── Footer ─── */
 .footer {
-  padding: 10px 28px;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  border-top: 1px solid var(--border);
-  background: var(--bg2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 /* ─── Responsive ─── */

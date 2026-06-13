@@ -12,11 +12,12 @@
 
 ### Ключевые возможности
 
-- **Двухуровневая детекция** — eBPF kprobe на `vfs_write` перехватывает запись в файлы на уровне ядра (поведенческий анализ частоты записи), агент вычисляет энтропию Шеннона H = −Σ p·log₂(p) для каждого изменённого файла. Нормальные файлы: H = 3–5 бит. Зашифрованные: H > 7.9 бит
-- **Защита от ложных срабатываний** — whitelist легитимных процессов (компиляторы, git, borg) + детекция ransomware-расширений (.locked, .enc, .wncry), пробивающая whitelist
-- **Автоматическая реакция** — при обнаружении атаки система переводит директорию в режим read-only (lockdown) и сигнализирует borg-сервису о внеплановом бэкапе через разделяемый volume
-- **WORM-хранилище** — BorgBackup в режиме append-only: архивы невозможно изменить или удалить даже при компрометации системы
-- **Сетевая изоляция** — сервисы разнесены по изолированным Docker-сетям (Zero Trust); для multi-host развёртывания подготовлены конфигурации WireGuard VPN
+- **Двухуровневая детекция с корреляцией** — eBPF kprobe на `vfs_write` перехватывает запись на уровне ядра и **атрибутирует процесс-источник** (поведенческий сигнал), а энтропия Шеннона H = −Σ p·log₂(p) по содержимому файла даёт контентную детекцию. Авторитетный детектор — энтропийный слой (нормальные файлы 3–5 бит, зашифрованные > 7.9), который через атрибуцию eBPF связывает инцидент с конкретным PID
+- **Точечная реакция** — при подтверждённом шифровании система **завершает процесс-источник** по PID (агент в `pid: host`), переводит директорию в read-only (lockdown) и инициирует внеплановый бэкап. Завершение инфраструктуры исключено whitelist'ом по реальному пути `/proc/pid/exe`
+- **Защита от ложных срабатываний** — инцидент квалифицируется только комбинацией сигналов (контент + атрибуция); реальный системный шум (браузеры, БД) не эскалируется
+- **Настоящий серверный WORM** — репозиторий на отдельном узле `borg-server`, доступном только по SSH через WireGuard; `borg serve --append-only` навязывает неизменяемость на стороне сервера, у клиента нет файлового доступа к репозиторию и он может выполнить лишь `borg serve`
+- **Сетевая изоляция (Zero Trust)** — две изолированные Docker-сети + **реальный WireGuard-туннель** (10.8.0.0/24), по которому идёт весь трафик резервного копирования; репозиторий недостижим вне VPN
+- **Аутентификация** — обмен метриками и управляющие действия защищены bearer-токеном (machine-to-machine)
 - **Аудит-лог** — каждый инцидент фиксируется в изолированной SQLite БД для криминалистического анализа
 - **Дашборд реального времени** — мониторинг энтропии, RPO/RTO метрик, истории инцидентов и бэкапов
 
@@ -26,49 +27,43 @@
 
 | Компонент | Технология |
 |-----------|------------|
-| Перехват на уровне ядра | eBPF (BCC) — kprobe `vfs_write` |
-| Агент мониторинга | Python 3.11 + watchdog (inotify fallback) |
-| API шлюз | FastAPI + Uvicorn + slowapi (rate limiting) |
+| Перехват на уровне ядра | eBPF (BCC) — kprobe `vfs_write`, атрибуция процессов |
+| Агент мониторинга | Python 3.11 + watchdog (inotify) + энтропия Шеннона |
+| API шлюз | FastAPI + Uvicorn + slowapi (rate limiting) + bearer-auth |
 | База метрик | PostgreSQL + TimescaleDB (hypertables) |
 | Аудит | SQLite (append-only) |
-| Резервное копирование | BorgBackup (WORM/append-only) |
-| Сетевая изоляция | Docker bridge-сети; WireGuard для multi-host (production) |
+| Резервное копирование | BorgBackup, серверный `borg serve --append-only` (WORM) |
+| Узел хранения | отдельный `borg-server` по SSH через WireGuard |
+| Сетевая изоляция | Docker bridge-сети + WireGuard-туннель (реальный транспорт бэкапов) |
 | Дашборд | Nuxt 4 + Vue 3.5 + Chart.js |
-| Тесты | pytest (84 теста) |
-| Оркестрация | Docker + Docker Compose |
+| Тесты | pytest (87 тестов) |
+| Оркестрация | Docker + Docker Compose (6 сервисов) |
 
 ---
 
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose                            │
-│                                                             │
-│  ┌──────────┐  signal   ┌──────────┐                        │
-│  │  Agent   │──────────▶│   Borg   │                        │
-│  │ eBPF     │ /signals  │  backup  │                        │
-│  │ watchdog │           │  WORM    │                        │
-│  │ entropy  │           │append-only│                       │
-│  └────┬─────┘           └────┬─────┘                        │
-│       │                      │                               │
-│       └──────────┬───────────┘                               │
-│               │ HTTP/REST                                    │
-│       ┌───────▼──────────┐                                  │
-│       │    FastAPI        │                                  │
-│       │    Backend        │                                  │
-│       └───────┬──────────┘                                  │
-│               │                                             │
-│       ┌───────▼──────────┐    ┌────────────┐               │
-│       │  TimescaleDB     │    │   SQLite   │               │
-│       │  (метрики)       │    │  (аудит)   │               │
-│       └──────────────────┘    └────────────┘               │
-│                                                             │
-│  ┌──────────────────────┐                                   │
-│  │   Nuxt 4 Dashboard   │ ← http://localhost:3000           │
-│  │   real-time polling  │                                   │
-│  └──────────────────────┘                                   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Docker Compose (6 сервисов)                  │
+│                                                                        │
+│  ┌──────────┐  HTTP /backup  ┌──────────┐   ssh:// через WireGuard    │
+│  │  Agent   │───────────────▶│   Borg   │═══════════════════╗         │
+│  │ eBPF     │  (control)      │ (клиент) │   wg0 10.8.0.0/24 ║         │
+│  │ watchdog │  атрибуция+kill └────┬─────┘                   ▼         │
+│  │ entropy  │                      │              ┌────────────────┐  │
+│  └────┬─────┘                      │              │   borg-server  │  │
+│       │ HTTP+token                 │ HTTP+token   │ serve          │  │
+│       ▼                            ▼              │ --append-only  │  │
+│  ┌───────────────────┐                           │ (серверный WORM)│  │
+│  │   FastAPI Backend │◀─── reset → agent /release└────────────────┘  │
+│  └───────┬───────────┘                                                 │
+│          │                                                             │
+│   ┌──────▼───────┐   ┌────────────┐    ┌──────────────────────┐       │
+│   │ TimescaleDB  │   │   SQLite   │    │   Nuxt 4 Dashboard   │       │
+│   │  (метрики)   │   │  (аудит)   │    │  ← localhost:3000     │       │
+│   └──────────────┘   └────────────┘    └──────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Сетевая изоляция
@@ -76,11 +71,14 @@
 ```
 backend_net  172.20.0.0/24  — внутренний трафик сервисов
 frontend_net               — изолированная сеть UI
+wg0          10.8.0.0/24    — WireGuard-туннель borg-клиент ↔ borg-server
 ```
 
-Для multi-host развёртывания (агенты на отдельных машинах) подготовлены
-конфигурации WireGuard VPN — см. `wireguard/`. В однохостовой демонстрации
-VPN не используется: трафик не покидает изолированные Docker-сети.
+Репозиторий BorgBackup вынесен на отдельный узел `borg-server`, sshd которого
+слушает **только** на адресе WireGuard-туннеля — хранилище недостижимо иначе как
+через VPN (Zero Trust). Весь трафик резервного копирования (`borg create`,
+`extract`, `break-lock`) идёт по туннелю. Эта же схема разворачивается на
+несколько хостов в production.
 
 ---
 
@@ -227,10 +225,14 @@ ransomware-backup-system/
 │       ├── pages/index.vue # главная страница
 │       ├── components/     # StatCard, EntropyChart, IncidentTable...
 │       └── composables/
-├── borg/                   # BorgBackup WORM сервис
-│   ├── backup.py           # плановые + emergency бэкапы, RPO/RTO
+├── borg/                   # BorgBackup клиент: бэкапит /monitored по ssh:// через WG
+│   ├── backup.py           # плановые + emergency бэкапы, измеряемый RPO/RTO
+│   ├── entrypoint.sh       # поднятие WireGuard-туннеля + запуск backup.py
 │   └── Dockerfile
-├── wireguard/              # WireGuard VPN (production multi-host, в демо не используется)
+├── borg-server/            # Узел хранения: borg serve --append-only по SSH (WORM)
+│   ├── entrypoint.sh       # WireGuard + sshd на адресе туннеля + forced-command
+│   └── Dockerfile
+├── wireguard/              # Ключи/конфиги WireGuard (генерируются при установке)
 ├── db/migrations/          # SQL схемы TimescaleDB (hypertables)
 ├── tests/                  # pytest: энтропия, whitelist, RTO, инциденты
 ├── docker-compose.yml
@@ -256,9 +258,9 @@ H(X) = -Σ p(x) · log₂(p(x))
 | Сжатый (.zip, .gz) | 7.0 – 7.5 бит |
 | **Зашифрованный** | **7.8 – 8.0 бит** |
 
-При превышении порога 7.2 бит агент регистрирует алерт. При трёх алертах за 30 секунд — инцидент и lockdown.
+При превышении порога 7.2 бит агент регистрирует алерт. Реакция эскалируется по числу алертов в окне 30 секунд: ≥3 алертов (или подозрительное расширение) — внеплановый бэкап; ≥10 алертов или энтропия ≥7.9 — lockdown.
 
-Параллельно eBPF-монитор отслеживает частоту записи каждого процесса на уровне ядра: ≥50 записей за 10 секунд или ≥5 МБ/с от процесса вне whitelist — поведенческий признак шифровальщика, реакция запускается немедленно.
+Параллельно eBPF-зонд на `vfs_write` ведёт **атрибуцию**: запоминает, какой процесс (PID) писал каждый файл. Когда энтропийный слой подтверждает шифрование, агент через атрибуцию eBPF получает PID источника и **завершает процесс** (`SIGKILL`), а не только блокирует каталог. Так корреляция контента (энтропия) и поведения/идентичности (eBPF) даёт точечную реакцию вместо реакции по одному сигналу.
 
 ---
 
@@ -268,7 +270,7 @@ H(X) = -Σ p(x) · log₂(p(x))
 make test        # или: python3 -m pytest tests/ -v
 ```
 
-84 модульных теста покрывают математическое ядро системы:
+87 модульных тестов покрывают математическое ядро системы:
 
 | Файл | Что проверяется |
 |------|-----------------|
@@ -297,11 +299,12 @@ make test        # или: python3 -m pytest tests/ -v
 
 ### Key Features
 
-- **Two-layer detection** — an eBPF kprobe on `vfs_write` intercepts file writes at the kernel level (behavioral write-rate analysis), while the agent computes Shannon entropy H = −Σ p·log₂(p) for every modified file. Normal files score H = 3–5 bits; encrypted files score H > 7.9 bits
-- **False-positive protection** — a whitelist of legitimate processes (compilers, git, borg) combined with ransomware-extension detection (.locked, .enc, .wncry) that overrides the whitelist
-- **Automatic response** — upon detecting an attack, the system sets the monitored directory to read-only (lockdown) and signals the borg service for an immediate emergency backup via a shared volume
-- **WORM storage** — BorgBackup in append-only mode: archives cannot be modified or deleted even if the system is compromised
-- **Network isolation** — services are separated into isolated Docker networks (Zero Trust); WireGuard VPN configurations are provided for multi-host deployments
+- **Two-layer correlated detection** — an eBPF kprobe on `vfs_write` intercepts writes at the kernel level and **attributes the source process**, while Shannon entropy H = −Σ p·log₂(p) over file content does the content detection. The entropy layer is authoritative (normal 3–5 bits, encrypted > 7.9) and links an incident to a concrete PID via eBPF attribution
+- **Targeted response** — on confirmed encryption the system **kills the source process** by PID (agent runs in `pid: host`), sets the directory read-only (lockdown), and triggers a backup. Infrastructure is protected by a real `/proc/pid/exe` path whitelist
+- **False-positive protection** — an incident requires a combination of signals (content + attribution); real system noise (browsers, databases) is not escalated
+- **True server-side WORM** — the repository lives on a separate `borg-server` node reachable only via SSH over WireGuard; `borg serve --append-only` enforces immutability server-side. The client has no filesystem access to the repo and can only run `borg serve`
+- **Network isolation (Zero Trust)** — two isolated Docker networks plus a **real WireGuard tunnel** (10.8.0.0/24) carrying all backup traffic; the repository is unreachable outside the VPN
+- **Authentication** — metric ingestion and control actions are protected by a machine-to-machine bearer token
 - **Audit log** — every incident is recorded in an isolated SQLite database for forensic analysis
 - **Real-time dashboard** — monitoring of entropy, RPO/RTO metrics, incident history, and backup events
 
@@ -311,49 +314,43 @@ make test        # или: python3 -m pytest tests/ -v
 
 | Component | Technology |
 |-----------|------------|
-| Kernel-level interception | eBPF (BCC) — kprobe `vfs_write` |
-| Monitoring agent | Python 3.11 + watchdog (inotify fallback) |
-| API gateway | FastAPI + Uvicorn + slowapi (rate limiting) |
+| Kernel-level interception | eBPF (BCC) — kprobe `vfs_write`, process attribution |
+| Monitoring agent | Python 3.11 + watchdog (inotify) + Shannon entropy |
+| API gateway | FastAPI + Uvicorn + slowapi (rate limiting) + bearer auth |
 | Metrics database | PostgreSQL + TimescaleDB (hypertables) |
 | Audit database | SQLite (append-only) |
-| Backup | BorgBackup (WORM/append-only) |
-| Network isolation | Docker bridge networks; WireGuard for multi-host (production) |
+| Backup | BorgBackup, server-side `borg serve --append-only` (WORM) |
+| Storage node | separate `borg-server` over SSH through WireGuard |
+| Network isolation | Docker bridge networks + WireGuard tunnel (real backup transport) |
 | Dashboard | Nuxt 4 + Vue 3.5 + Chart.js |
-| Tests | pytest (84 tests) |
-| Orchestration | Docker + Docker Compose |
+| Tests | pytest (87 tests) |
+| Orchestration | Docker + Docker Compose (6 services) |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose                            │
-│                                                             │
-│  ┌──────────┐  signal   ┌──────────┐                        │
-│  │  Agent   │──────────▶│   Borg   │                        │
-│  │ eBPF     │ /signals  │  backup  │                        │
-│  │ watchdog │           │  WORM    │                        │
-│  │ entropy  │           │append-only│                       │
-│  └────┬─────┘           └────┬─────┘                        │
-│       │                      │                               │
-│       └──────────┬───────────┘                               │
-│               │ HTTP/REST                                    │
-│       ┌───────▼──────────┐                                  │
-│       │    FastAPI        │                                  │
-│       │    Backend        │                                  │
-│       └───────┬──────────┘                                  │
-│               │                                             │
-│       ┌───────▼──────────┐    ┌────────────┐               │
-│       │  TimescaleDB     │    │   SQLite   │               │
-│       │  (metrics)       │    │  (audit)   │               │
-│       └──────────────────┘    └────────────┘               │
-│                                                             │
-│  ┌──────────────────────┐                                   │
-│  │   Nuxt 4 Dashboard   │ ← http://localhost:3000           │
-│  │   real-time polling  │                                   │
-│  └──────────────────────┘                                   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                         Docker Compose (6 services)                   │
+│                                                                        │
+│  ┌──────────┐  HTTP /backup  ┌──────────┐   ssh:// over WireGuard      │
+│  │  Agent   │───────────────▶│   Borg   │═══════════════════╗          │
+│  │ eBPF     │  (control)      │ (client) │   wg0 10.8.0.0/24 ║          │
+│  │ watchdog │  attribute+kill └────┬─────┘                   ▼          │
+│  │ entropy  │                      │              ┌────────────────┐   │
+│  └────┬─────┘                      │              │   borg-server  │   │
+│       │ HTTP+token                 │ HTTP+token   │ serve          │   │
+│       ▼                            ▼              │ --append-only  │   │
+│  ┌───────────────────┐                           │ (server WORM)  │   │
+│  │   FastAPI Backend │◀─── reset → agent /release└────────────────┘   │
+│  └───────┬───────────┘                                                 │
+│          │                                                             │
+│   ┌──────▼───────┐   ┌────────────┐    ┌──────────────────────┐        │
+│   │ TimescaleDB  │   │   SQLite   │    │   Nuxt 4 Dashboard   │        │
+│   │  (metrics)   │   │  (audit)   │    │  ← localhost:3000     │        │
+│   └──────────────┘   └────────────┘    └──────────────────────┘        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -488,7 +485,9 @@ H(X) = -Σ p(x) · log₂(p(x))
 | Compressed (.zip, .gz) | 7.0 – 7.5 bits |
 | **Encrypted** | **7.8 – 8.0 bits** |
 
-When entropy exceeds the 7.2-bit threshold, the agent registers an alert. Three alerts within 30 seconds trigger an incident and lockdown.
+When entropy exceeds the 7.2-bit threshold, the agent registers an alert. The response escalates by alert count within a 30-second window: ≥3 alerts (or a suspicious extension) trigger an emergency backup; ≥10 alerts or entropy ≥7.9 trigger a lockdown.
+
+In parallel, the eBPF probe on `vfs_write` performs **attribution** — recording which process (PID) wrote each file. When the entropy layer confirms encryption, the agent resolves the source PID via eBPF attribution and **kills the process** (`SIGKILL`), not just locking the directory. Correlating content (entropy) with behaviour/identity (eBPF) yields a targeted response instead of acting on a single signal.
 
 In parallel, the eBPF monitor tracks per-process write rates at the kernel level: ≥50 writes in 10 seconds or ≥5 MB/s from a non-whitelisted process is a behavioral signature of an encryptor, triggering an immediate response.
 
@@ -500,7 +499,7 @@ In parallel, the eBPF monitor tracks per-process write rates at the kernel level
 make test        # or: python3 -m pytest tests/ -v
 ```
 
-84 unit tests cover the mathematical core of the system: Shannon entropy (boundary cases, the 7.2-bit threshold), the eBPF process whitelist and ransomware-extension detection, RTO estimation, and incident escalation logic. Tests run without Docker or databases — external dependencies are mocked in `tests/conftest.py`.
+87 unit tests cover the mathematical core of the system: Shannon entropy (boundary cases, the 7.2-bit threshold), the eBPF process whitelist and ransomware-extension detection, RTO estimation, and incident escalation logic. Tests run without Docker or databases — external dependencies are mocked in `tests/conftest.py`.
 
 ---
 

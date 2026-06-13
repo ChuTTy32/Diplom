@@ -11,6 +11,9 @@
 WATCH_PATH := $(shell grep '^WATCH_PATH=' .env 2>/dev/null | cut -d= -f2 | tr -d '"')
 WATCH_PATH := $(or $(WATCH_PATH),/tmp/monitored)
 
+# Bearer-токен для админ-действий (reset-lockdown), читаем из .env
+RG_TOKEN := $(shell grep '^RG_TOKEN=' .env 2>/dev/null | cut -d= -f2 | tr -d '"')
+
 # Docker: без sudo если пользователь в группе docker
 DOCKER := $(shell docker info >/dev/null 2>&1 && echo "docker" || echo "sudo docker")
 DC     := $(DOCKER) compose
@@ -148,9 +151,9 @@ check:
 # ─── Сброс lockdown ──────────────────────────────────────────────────
 reset:
 	@echo "$(YEL)[RESET] Сброс lockdown...$(NC)"
-	@curl -s -X POST http://localhost:8000/incidents/reset-lockdown > /dev/null
-	@chmod -R 755 $(WATCH_PATH) 2>/dev/null || true
-	@echo "$(GRN)✓ Lockdown снят. WATCH_PATH=$(WATCH_PATH) → 755$(NC)"
+	@curl -s -X POST -H "Authorization: Bearer $(RG_TOKEN)" \
+		http://localhost:8000/incidents/reset-lockdown > /dev/null
+	@echo "$(GRN)✓ Lockdown снят (команда форвардится агенту)$(NC)"
 
 # ─── Очистка ─────────────────────────────────────────────────────────
 clean:

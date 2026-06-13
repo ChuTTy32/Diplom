@@ -24,9 +24,8 @@ networks:
 volumes:
   timescale_data:
   borg_repo:
-  # Сигнальный канал agent → borg: файл emergency_backup запускает
-  # внеплановый бэкап немедленно при инциденте
-  signals:
+  # Общий канал для одноразовой передачи ключей WireGuard/SSH borg-server → borg
+  borg_secrets:
 
 services:
 
@@ -64,8 +63,6 @@ services:
       SQLITE_PATH: /app/data/audit.db
     volumes:
       - ./backend:/app
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${WATCH_PATH:-/tmp/monitored}:/monitored
     ports:
       - "8000:8000"
     networks:
@@ -92,18 +89,21 @@ services:
     container_name: agent
     restart: unless-stopped
     privileged: true
+    # pid: host — eBPF отдаёт PID в пространстве хоста; чтобы агент мог
+    # завершить процесс-шифровальщик (os.kill) и читать /proc/<pid>/exe
+    # для whitelist по пути бинаря, ему нужно общее с хостом PID-пространство.
+    pid: host
     volumes:
       - ./agent:/app
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
-      - signals:/signals
       - /usr/src:/usr/src:ro
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
     env_file: .env
     environment:
       BACKEND_URL: http://backend:8000
+      BORG_URL: http://borg:9102
       WATCH_PATH: /monitored
-      SIGNAL_DIR: /signals
       ENTROPY_THRESHOLD: ${ENTROPY_THRESHOLD:-7.2}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5}
     networks:
@@ -112,28 +112,48 @@ services:
       backend:
         condition: service_healthy
 
-  # ─── BorgBackup ──────────────────────────────────────────────────────
+  # ─── Borg-сервер (изолированный узел хранения, серверный WORM) ────────
+  # Держит репозиторий и навязывает append-only через `borg serve`.
+  # SSH доступен только на адресе WireGuard-туннеля — репозиторий
+  # недостижим иначе как через VPN (Zero Trust).
+  borgserver:
+    build:
+      context: ./borg-server
+      dockerfile: Dockerfile
+    container_name: borgserver
+    restart: unless-stopped
+    privileged: true            # WireGuard (NET_ADMIN, создание wg-интерфейса)
+    environment:
+      BORG_PASSPHRASE: ${BORG_PASSPHRASE:-changeme}
+    volumes:
+      - borg_repo:/repo
+      - borg_secrets:/secrets
+    networks:
+      - backend_net
+
+  # ─── Borg-клиент ─────────────────────────────────────────────────────
+  # Бэкапит /monitored и пушит на borg-server по ssh:// ЧЕРЕЗ WireGuard.
   borg:
     build:
       context: ./borg
       dockerfile: Dockerfile
     container_name: borg
     restart: unless-stopped
+    privileged: true            # WireGuard-туннель до borg-server
     env_file: .env
     environment:
-      BORG_REPO: /repo
+      BORG_REPO: ssh://root@10.8.0.1//repo
       BORG_PASSPHRASE: ${BORG_PASSPHRASE:-changeme}
       BACKUP_SOURCE: /monitored
       BACKEND_URL: http://backend:8000
-      SIGNAL_DIR: /signals
     volumes:
-      - borg_repo:/repo
       - ${WATCH_PATH:-/tmp/monitored}:/monitored
-      - signals:/signals
+      - borg_secrets:/secrets
     networks:
       - backend_net
     depends_on:
       - backend
+      - borgserver
 
   # ─── Nuxt 4 frontend ─────────────────────────────────────────────────
   frontend:

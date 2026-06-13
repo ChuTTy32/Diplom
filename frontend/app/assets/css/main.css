@@ -1,59 +1,133 @@
+/* =============================================================================
+   RansomGuard — дизайн-система (современный SOC-дашборд, 2020s)
+   Тёмный «refined» интерфейс: воздух, мягкие тени, скруглённые карточки,
+   сдержанно-яркая палитра. Inter для текста, моноширинный — только для чисел.
+   ========================================================================== */
 :root {
-  --bg:        #090b0f;
-  --bg2:       #0e1118;
-  --bg3:       #141820;
-  --border:    #1e2530;
-  --border2:   #2a3444;
-  --text:      #c8d4e0;
-  --text-dim:  #4a5a6a;
-  --text-mono: #7ab3c8;
-  --accent:    #00d4ff;
-  --accent2:   #0099bb;
-  --danger:    #ff3b5c;
-  --danger2:   #c0002a;
-  --warn:      #ffaa00;
-  --ok:        #00e676;
-  --ok2:       #00a152;
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-body: 'Inter', sans-serif;
+  /* Поверхности */
+  --bg:        #0a0b0f;
+  --bg-grad:   radial-gradient(1100px 520px at 82% -8%, #181b24 0%, #0a0b0f 58%);
+  --surface:   #14161d;
+  --surface-2: #191c24;
+  --surface-3: #20242e;
+
+  /* Границы — тонкие, низкой непрозрачности */
+  --border:    rgba(255, 255, 255, 0.07);
+  --border-2:  rgba(255, 255, 255, 0.13);
+
+  /* Текст */
+  --text:      #e6e8ee;
+  --text-2:    #aab1c0;
+  --text-dim:  #6b7384;
+  --text-mono: #a9b4ff;
+
+  /* Акценты (muted-vivid) */
+  --accent:    #818cf8;
+  --ok:        #34d399;
+  --warn:      #fbbf24;
+  --danger:    #fb7185;
+
+  /* Подложки состояний */
+  --ok-bg:     rgba(52, 211, 153, 0.12);
+  --warn-bg:   rgba(251, 191, 36, 0.13);
+  --danger-bg: rgba(251, 113, 133, 0.13);
+  --accent-bg: rgba(129, 140, 248, 0.13);
+
+  /* Форма и глубина */
+  --radius:    16px;
+  --radius-sm: 10px;
+  --shadow:    0 1px 2px rgba(0,0,0,0.4), 0 12px 32px -14px rgba(0,0,0,0.65);
+
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Обратная совместимость со старыми именами в scoped-стилях компонентов */
+  --bg2:     var(--surface);
+  --bg3:     var(--surface-2);
+  --border2: var(--border-2);
+  --accent2: #6366f1;
+  --danger2: rgba(251,113,133,0.45);
+  --ok2:     rgba(52,211,153,0.45);
 }
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
 html, body {
   background: var(--bg);
+  background-image: var(--bg-grad);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: var(--bg2); }
-::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
-.mono { font-family: var(--font-mono); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ─── Утилиты ──────────────────────────────────────────────────────── */
+.mono   { font-family: var(--font-mono); font-feature-settings: 'tnum' 1; }
 .danger { color: var(--danger); }
-.ok { color: var(--ok); }
-.warn { color: var(--warn); }
+.ok     { color: var(--ok); }
+.warn   { color: var(--warn); }
 .accent { color: var(--accent); }
-.dim { color: var(--text-dim); }
+.dim    { color: var(--text-dim); }
 
-/* ─── Легенда графиков: цветной маркер + подпись ──────────────────── */
-.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 8px; font-size: 10.5px; color: var(--text-dim); }
-.lg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
-.sw-dot { width: 9px; height: 9px; border-radius: 50%; }
-.sw-dash { width: 16px; height: 0; border-top: 2px dashed rgba(255,170,0,0.8); border-radius: 0; background: none; }
-
-/* ─── Всплывающее облачко-пояснение на ⓘ (hover/focus) ────────────── */
-.info-tip { position: relative; cursor: help; color: var(--accent); margin-left: 4px; font-size: 12px; outline: none; }
-.tip-bubble {
-  display: none; position: absolute; left: -8px; top: 20px; z-index: 50;
-  width: 340px; padding: 12px 14px;
-  background: var(--bg3); border: 1px solid var(--border2); border-radius: 3px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-  font-family: var(--font-body); font-size: 11.5px; line-height: 1.55;
-  color: var(--text); text-transform: none; letter-spacing: normal;
-  white-space: normal; font-weight: 400;
+/* ─── Карточка/панель ─────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.tip-bubble b { color: var(--accent); font-weight: 600; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 15px 20px; border-bottom: 1px solid var(--border);
+}
+.panel-title {
+  font-size: 13px; font-weight: 600; letter-spacing: 0.01em; color: var(--text);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+
+/* ─── Pills / бейджи состояний ────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+}
+.pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.is-ok     { color: var(--ok);     background: var(--ok-bg); }
+.pill.is-warn   { color: var(--warn);   background: var(--warn-bg); }
+.pill.is-danger { color: var(--danger); background: var(--danger-bg); }
+.pill.is-accent { color: var(--accent); background: var(--accent-bg); }
+.pill.is-muted  { color: var(--text-dim); background: rgba(255,255,255,0.05); }
+.pill.no-dot::before { display: none; }
+
+/* ─── Легенда графиков ────────────────────────────────────────────── */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 10px; font-size: 11px; color: var(--text-2); }
+.lg { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.sw-dot { width: 9px; height: 9px; border-radius: 50%; }
+.sw-dash { width: 16px; height: 0; border-top: 2px dashed rgba(251,191,36,0.85); background: none; }
+
+/* ─── Tooltip-подсказка на ⓘ ──────────────────────────────────────── */
+.info-tip { position: relative; cursor: help; color: var(--text-dim); margin-left: 5px; font-size: 12px; outline: none; transition: color 0.15s; }
+.info-tip:hover, .info-tip:focus { color: var(--accent); }
+.tip-bubble {
+  display: none; position: absolute; left: -8px; top: 22px; z-index: 50;
+  width: 320px; padding: 13px 15px;
+  background: var(--surface-3); border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+  box-shadow: 0 16px 40px -8px rgba(0,0,0,0.7);
+  font-family: var(--font-body); font-size: 12px; line-height: 1.6;
+  color: var(--text-2); text-transform: none; letter-spacing: normal; font-weight: 400; white-space: normal;
+}
+.tip-bubble b { color: var(--text); font-weight: 600; }
 .info-tip:hover .tip-bubble, .info-tip:focus .tip-bubble { display: block; }
