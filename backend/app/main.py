@@ -7,6 +7,7 @@ from app.api.metrics import router as metrics_router
 from app.api.incidents import router as incidents_router
 from app.core.audit import init_db
 from app.core.limiter import limiter
+from app.core.config import settings
 
 
 @asynccontextmanager
@@ -27,7 +28,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

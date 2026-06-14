@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     rg_token: str = ""
     # URL control-сервера агента (форвардинг сброса lockdown владельцу FS)
     agent_url: str = "http://agent:9101"
+    # Разрешённые origin'ы CORS (через запятую). Только origin дашборда —
+    # "*" противоречит Zero Trust. Переопределяется env CORS_ORIGINS.
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 settings = Settings()
