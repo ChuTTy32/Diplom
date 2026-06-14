@@ -1,8 +1,10 @@
 #!/bin/bash
 # Симуляция ransomware-атаки для демо комиссии
 # Использование:
-#   bash simulate_attack.sh          # стандартный темп (2 сек между файлами)
-#   bash simulate_attack.sh --fast   # быстро (0.5 сек), для повторных прогонов
+#   bash simulate_attack.sh             # стандартный темп (2 сек между файлами)
+#   bash simulate_attack.sh --fast      # быстро (0.5 сек), для повторных прогонов
+#   bash simulate_attack.sh --kill-demo # один долгоживущий шифровальщик →
+#                                         демонстрация точечного завершения процесса
 
 set -euo pipefail
 
@@ -11,7 +13,11 @@ BACKEND="http://localhost:8000"
 # Bearer-токен для админ-действий (reset-lockdown) — из .env, может быть пустым
 RG_TOKEN=$(grep '^RG_TOKEN=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
 DELAY=2
-[ "${1:-}" = "--fast" ] && DELAY=0.5
+KILL_DEMO=0
+case "${1:-}" in
+    --fast)      DELAY=0.5 ;;
+    --kill-demo) KILL_DEMO=1 ;;
+esac
 
 RED='\033[0;31m'; YEL='\033[1;33m'; GRN='\033[0;32m'
 CYN='\033[0;36m'; DIM='\033[2m'; NC='\033[0m'
@@ -71,6 +77,66 @@ rm -rf "$WATCH_DIR/documents"
 mkdir -p "$WATCH_DIR/documents"
 ok "Ready. watch_dir=$WATCH_DIR (старые демо-файлы удалены)"
 sleep 1
+
+# ── РЕЖИМ KILL-DEMO: точечное завершение процесса-источника ────────────
+# Одноразовый dd (по процессу на файл) умирает раньше, чем энтропийный слой
+# подтвердит шифрование, — убивать нечего, containment держит lockdown.
+# Здесь моделируем РЕАЛЬНЫЙ шифровальщик: один долгоживущий процесс шифрует
+# файлы в цикле. Агент успевает атрибутировать его живой PID (eBPF) и убить.
+if [ "$KILL_DEMO" = 1 ]; then
+    echo ""
+    echo -e "${RED}▶ KILL-DEMO — долгоживущий процесс-шифровальщик${NC}"
+    warn "Ожидаем в логах агента: '🔪 KILLED process pid=...'"
+    echo ""
+
+    WATCH_DIR="$WATCH_DIR" python3 -c "
+import os, time
+d = os.path.join(os.environ['WATCH_DIR'], 'documents')
+os.makedirs(d, exist_ok=True)
+for i in range(1, 61):
+    try:
+        with open(os.path.join(d, f'cryptor_{i}.locked'), 'wb') as f:
+            f.write(os.urandom(64 * 1024))
+    except (PermissionError, OSError):
+        break   # lockdown перевёл каталог в read-only
+    time.sleep(0.4)
+" &
+    ENC_PID=$!
+    log "Шифровальщик запущен: pid=$ENC_PID (пишет cryptor_*.locked в цикле)"
+
+    # Ждём, пока агент зафиксирует точечное завершение ЭТОГО pid.
+    # Критерий успеха — строка KILLED с нашим PID, а не просто «процесс исчез»
+    # (он мог бы завершиться и сам, упёршись в lockdown read-only).
+    KILLED=0
+    for _ in $(seq 1 30); do
+        sleep 0.5
+        if docker compose logs agent --since 2m 2>/dev/null \
+             | grep -q "KILLED process pid=$ENC_PID"; then
+            KILLED=1; break
+        fi
+    done
+
+    kill -9 "$ENC_PID" 2>/dev/null || true   # подчистка, если агент промахнулся
+    wait "$ENC_PID" 2>/dev/null || true
+
+    echo ""
+    log "Релевантные строки лога агента:"
+    docker compose logs agent --since 2m 2>/dev/null \
+        | grep -E "KILLED|kill pid=|LOCKDOWN|emergency" | tail -6 || true
+    echo ""
+
+    # Возвращаем каталог в рабочее состояние
+    curl -sf -X POST -H "Authorization: Bearer ${RG_TOKEN}" \
+        "$BACKEND/incidents/reset-lockdown" > /dev/null 2>&1 || true
+
+    if [ "$KILLED" = 1 ]; then
+        ok "KILL-DEMO успешен: процесс-источник (pid=$ENC_PID) завершён по атрибуции eBPF"
+        exit 0
+    else
+        err "KILL-DEMO: точечный kill не подтверждён — см. 'docker compose logs agent'"
+        exit 1
+    fi
+fi
 
 # ── ФАЗА 1: нормальные файлы (низкая энтропия) ────────────────────────
 echo ""

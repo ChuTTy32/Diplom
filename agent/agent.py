@@ -309,7 +309,11 @@ def _kill_process(pid: int | None, reason: str = "") -> bool:
         log.critical(f"🔪 KILLED process pid={pid} exe={exe} {reason}")
         return True
     except ProcessLookupError:
-        return False  # процесс уже завершился
+        # Источник уже завершился до подтверждения шифрования — типично для
+        # одноразовых писателей (один процесс на файл). Containment всё равно
+        # обеспечивает lockdown; kill точечно добивает ДОЛГОживущий шифровальщик.
+        log.info(f"kill pid={pid} skipped — источник уже завершился ({reason})")
+        return False
     except (PermissionError, OSError) as e:
         log.error(f"kill pid={pid} failed: {e}")
         return False

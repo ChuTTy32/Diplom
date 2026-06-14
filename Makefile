@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: help install start stop restart status logs logs-agent logs-backend \
-        demo demo-fast check reset clean open test
+        demo demo-fast demo-kill check reset clean open test
 
 # ─── Переменные ──────────────────────────────────────────────────────
 # Читаем WATCH_PATH из .env, fallback /tmp/monitored
@@ -43,6 +43,7 @@ help:
 	@echo "  $(GRN)make logs-backend$(NC) — следить за логами backend"
 	@echo "  $(GRN)make demo$(NC)         — симуляция ransomware-атаки"
 	@echo "  $(GRN)make demo-fast$(NC)    — быстрая симуляция (--fast)"
+	@echo "  $(GRN)make demo-kill$(NC)    — демо точечного завершения процесса-шифровальщика"
 	@echo "  $(GRN)make check$(NC)        — полная проверка системы"
 	@echo "  $(GRN)make test$(NC)         — запустить модульные тесты (pytest)"
 	@echo "  $(GRN)make reset$(NC)        — сбросить lockdown"
@@ -111,6 +112,9 @@ demo:
 
 demo-fast:
 	@bash simulate_attack.sh --fast
+
+demo-kill:
+	@bash simulate_attack.sh --kill-demo
 
 # ─── Полная проверка ─────────────────────────────────────────────────
 check:
