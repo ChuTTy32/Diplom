@@ -140,6 +140,21 @@ step "Создание директорий"
 mkdir -p "$WATCH_PATH"
 ok "WATCH_PATH: $WATCH_PATH"
 
+# Каталог мог остаться от прошлого `docker compose up` во владении root
+# (Docker создаёт точку bind-mount как root). Тогда симуляция атаки, которая
+# пишет от текущего пользователя, падает на mkdir: Permission denied.
+# Приводим владельца к текущему пользователю.
+CUR_USER=$(id -un)
+if [ "$(stat -c '%U' "$WATCH_PATH" 2>/dev/null)" != "$CUR_USER" ]; then
+    if chown -R "$CUR_USER:$CUR_USER" "$WATCH_PATH" 2>/dev/null \
+       || sudo chown -R "$CUR_USER:$CUR_USER" "$WATCH_PATH" 2>/dev/null; then
+        ok "Владелец $WATCH_PATH → $CUR_USER"
+    else
+        warn "$WATCH_PATH принадлежит другому пользователю; смена не удалась"
+        warn "  Выполните вручную: sudo chown -R $CUR_USER:$CUR_USER $WATCH_PATH"
+    fi
+fi
+
 mkdir -p backend/data
 ok "backend/data (SQLite аудит-лог)"
 
