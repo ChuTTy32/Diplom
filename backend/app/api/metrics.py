@@ -99,9 +99,12 @@ async def get_summary(db: AsyncSession = Depends(get_db)):
         {"since": since_1h},
     )
     avg_entropy = avg_e.scalar()
+    # time <= now() отсекает записи «из будущего» (рассинхрон часов в момент
+    # вставки): иначе будущая метка выигрывает ORDER BY time DESC и подменяет
+    # реальный последний бэкап, а на дашборде получается «-N с назад».
     last_bk = await db.execute(text(
         "SELECT time, rpo_minutes, rto_minutes FROM backup_events "
-        "WHERE event_type = 'success' ORDER BY time DESC LIMIT 1"
+        "WHERE event_type = 'success' AND time <= now() ORDER BY time DESC LIMIT 1"
     ))
     bk_row = last_bk.mappings().one_or_none()
     return AlertSummary(

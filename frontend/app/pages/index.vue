@@ -138,6 +138,9 @@ function fmtTime(t: string) {
 }
 function fmtRelative(t: string) {
   const diff = Math.floor((Date.now() - new Date(t).getTime()) / 1000)
+  // Метка времени в будущем (рассинхрон часов / битая запись) — не печатаем
+  // «-20024 с назад», показываем нейтральное «только что».
+  if (diff < 0) return 'только что'
   if (diff < 60) return diff + ' с назад'
   if (diff < 3600) return Math.floor(diff / 60) + ' мин назад'
   return Math.floor(diff / 3600) + ' ч назад'
