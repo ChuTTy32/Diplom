@@ -67,8 +67,8 @@ async def get_backup_events(limit: int = Query(50, ge=1, le=200), db: AsyncSessi
 @limiter.limit("120/minute")
 async def ingest_system(request: Request, payload: SystemMetricIn, db: AsyncSession = Depends(get_db)):
     await db.execute(text(
-        "INSERT INTO system_metrics (cpu_pct, mem_pct, disk_pct, net_in_kb, net_out_kb) "
-        "VALUES (:cpu_pct, :mem_pct, :disk_pct, :net_in_kb, :net_out_kb)"
+        "INSERT INTO system_metrics (cpu_pct, mem_pct, disk_pct, disk_write_mbps, net_in_kb, net_out_kb) "
+        "VALUES (:cpu_pct, :mem_pct, :disk_pct, :disk_write_mbps, :net_in_kb, :net_out_kb)"
     ), payload.model_dump())
     await db.commit()
     return {"status": "ok"}

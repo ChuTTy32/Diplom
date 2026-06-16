@@ -96,7 +96,7 @@ os.makedirs(d, exist_ok=True)
 for i in range(1, 61):
     try:
         with open(os.path.join(d, f'cryptor_{i}.locked'), 'wb') as f:
-            f.write(os.urandom(64 * 1024))
+            f.write(os.urandom(1024 * 1024))
     except (PermissionError, OSError):
         break   # lockdown перевёл каталог в read-only
     time.sleep(0.4)
@@ -160,7 +160,7 @@ warn "Watch dashboard → entropy spikes: http://localhost:3000"
 echo ""
 
 for i in {1..6}; do
-    SIZE=$((32 + RANDOM % 96))
+    SIZE=$((8192 + RANDOM % 8192))   # 8–16 МБ: создаёт заметный всплеск записи на диск
     FILE="$WATCH_DIR/documents/encrypted_${i}.locked"
     # В медленном режиме lockdown может сработать уже здесь —
     # защита быстрее атаки, это успех, а не ошибка скрипта
@@ -182,7 +182,7 @@ echo ""
 
 for i in {1..6}; do
     FILE="$WATCH_DIR/documents/RANSOM_${i}.enc"
-    if ! dd if=/dev/urandom of="$FILE" bs=1024 count=64 2>/dev/null; then
+    if ! dd if=/dev/urandom of="$FILE" bs=1024 count=8192 2>/dev/null; then
         warn "Не могу записать RANSOM_${i}.enc — вероятно lockdown уже сработал"
         warn "Это ожидаемое поведение: директория переведена в read-only"
         break

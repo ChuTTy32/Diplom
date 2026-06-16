@@ -171,18 +171,38 @@ def send_entropy(file_path: str, entropy: float, file_size: int, alert: bool):
         register_alert(file_path, entropy)
 
 
+_last_disk_io = None   # (write_bytes, ts) — для расчёта скорости записи между опросами
+
+
 def send_system_metrics():
+    global _last_disk_io
     try:
         disk = psutil.disk_usage(WATCH_PATH)
         net  = psutil.net_io_counters()
+
+        # Скорость записи на диск (МБ/с) — дельта счётчика write_bytes между
+        # опросами. Именно она, в отличие от заполненности раздела (disk.percent),
+        # резко растёт при массовом шифровании: ransomware интенсивно пишет на диск.
+        write_mbps = 0.0
+        io  = psutil.disk_io_counters()
+        now = time.time()
+        if io is not None:
+            if _last_disk_io is not None:
+                d_bytes = io.write_bytes - _last_disk_io[0]
+                d_t     = now - _last_disk_io[1]
+                if d_t > 0 and d_bytes >= 0:
+                    write_mbps = round(d_bytes / d_t / 1_000_000, 3)
+            _last_disk_io = (io.write_bytes, now)
+
         httpx.post(
             f"{BACKEND_URL}/metrics/system",
             json={
-                "cpu_pct":    psutil.cpu_percent(interval=1),
-                "mem_pct":    psutil.virtual_memory().percent,
-                "disk_pct":   disk.percent,
-                "net_in_kb":  net.bytes_recv / 1024,
-                "net_out_kb": net.bytes_sent / 1024,
+                "cpu_pct":         psutil.cpu_percent(interval=1),
+                "mem_pct":         psutil.virtual_memory().percent,
+                "disk_pct":        disk.percent,
+                "disk_write_mbps": write_mbps,
+                "net_in_kb":       net.bytes_recv / 1024,
+                "net_out_kb":      net.bytes_sent / 1024,
             },
             headers=_auth_headers(),
             timeout=5.0,

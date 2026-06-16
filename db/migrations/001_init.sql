@@ -31,12 +31,13 @@ SELECT create_hypertable('backup_events', 'time', if_not_exists => TRUE);
 
 -- ─── Системные метрики ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS system_metrics (
-    time        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    cpu_pct     REAL,
-    mem_pct     REAL,
-    disk_pct    REAL,
-    net_in_kb   REAL,
-    net_out_kb  REAL
+    time            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    cpu_pct         REAL,
+    mem_pct         REAL,
+    disk_pct        REAL,
+    disk_write_mbps REAL,
+    net_in_kb       REAL,
+    net_out_kb      REAL
 );
 
 SELECT create_hypertable('system_metrics', 'time', if_not_exists => TRUE);

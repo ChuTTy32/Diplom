@@ -51,6 +51,7 @@ class SystemMetricIn(BaseModel):
     cpu_pct: float
     mem_pct: float
     disk_pct: float
+    disk_write_mbps: float = 0.0
     net_in_kb: float = 0.0
     net_out_kb: float = 0.0
 
